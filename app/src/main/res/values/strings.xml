@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Scrollite</string>
+    <string name="accessibility_service_description">Scrollite monitors app usage to help you stay aware of your screen time habits.</string>
 </resources>
