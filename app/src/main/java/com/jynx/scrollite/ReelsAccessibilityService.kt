@@ -41,6 +41,11 @@ class ReelsAccessibilityService : AccessibilityService() {
         val (isReels, matchCount, totalSignals) = isReelsScreen(root)
         Log.d(TAG, "isReels=$isReels matchCount=$matchCount totalSignals=$totalSignals")
 
+        if (isReels) {
+            val username = extractUsername(root)
+            Log.d(TAG, "REELS DETECTED username=$username") // TEMP: verify username extraction, remove before production
+        }
+
         // TEMP: UI exploration, remove before production
         val now = System.currentTimeMillis()
         if (now - lastDumpMs >= DUMP_INTERVAL_MS) {
@@ -80,6 +85,22 @@ class ReelsAccessibilityService : AccessibilityService() {
     private fun hasViewId(root: AccessibilityNodeInfo, viewId: String): Boolean {
         return root.findAccessibilityNodeInfosByViewId(viewId)
             .any { it.isVisibleToUser }
+    }
+
+    /**
+     * Reads the author username text off the clips_author_username node.
+     * recycle() is a no-op on API 33+ (pool removed) but still matters on
+     * this app's minSdk 26-32 range, so it's called unconditionally.
+     */
+    private fun extractUsername(root: AccessibilityNodeInfo): String? {
+        val nodes = root.findAccessibilityNodeInfosByViewId(ID_AUTHOR_USERNAME)
+        try {
+            return nodes.firstOrNull { it.isVisibleToUser }
+                ?.text?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() }
+        } finally {
+            nodes.forEach { it.recycle() }
+        }
     }
 
     /**
