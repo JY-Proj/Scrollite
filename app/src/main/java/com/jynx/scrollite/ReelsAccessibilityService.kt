@@ -17,7 +17,7 @@ class ReelsAccessibilityService : AccessibilityService() {
         // Signals discovered via Layout Inspector / the temp dump function
         private const val ID_CLIPS_PAGER = "com.instagram.android:id/clips_viewer_view_pager"
         private const val ID_AUTHOR_USERNAME = "com.instagram.android:id/clips_author_username"
-        private const val ID_TAB_CLIPS = "com.instaram.android:id/clips_tab"
+        private const val ID_TAB_CLIPS = "com.instagram.android:id/clips_tab"
 
         // button group
         private const val ID_LIKE_BUTTON = "com.instagram.android:id/like_button"
@@ -64,7 +64,7 @@ class ReelsAccessibilityService : AccessibilityService() {
             hasViewId(root, ID_COMMENT_BUTTON) &&
             hasViewId(root, ID_DIRECT_SHARE_BUTTON) &&
             hasViewId(root, ID_CLIPS_UFI_MORE_BUTTON_COMPONENT),
-//            isTabSelected(root, ID_TAB_CLIPS), TODO: consider adding later; didn't work when I tried
+            isTabSelected(root, ID_TAB_CLIPS),
             // add more checks here as we nail down more signals,
             // e.g. hasContentDescription(root, "Like"), hasContentDescription(root, "Share reel")
         )
