@@ -37,18 +37,18 @@ class ReelsAccessibilityService : AccessibilityService() {
 
         val root = rootInActiveWindow ?: return
 
-        // TEMP: UI exploration, remove before production
-        if (event.packageName == INSTAGRAM_PKG) {
-            val now = System.currentTimeMillis()
-            if (now - lastDumpMs >= DUMP_INTERVAL_MS) {
-                lastDumpMs = now
-                dumpNodeTree(rootInActiveWindow, depth = 0)
-            }
-        }
-
-        // Detection
+        // Detection runs first — dumpNodeTree recycles root, so it must go last
         val (isReels, matchCount, totalSignals) = isReelsScreen(root)
         Log.d(TAG, "isReels=$isReels matchCount=$matchCount totalSignals=$totalSignals")
+
+        // TEMP: UI exploration, remove before production
+        val now = System.currentTimeMillis()
+        if (now - lastDumpMs >= DUMP_INTERVAL_MS) {
+            lastDumpMs = now
+            dumpNodeTree(root, depth = 0) // recycles root
+        } else {
+            root.recycle()
+        }
     }
 
     /**
