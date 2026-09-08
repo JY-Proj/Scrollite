@@ -4,6 +4,16 @@ import android.accessibilityservice.AccessibilityService
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.jynx.scrollite.data.AppDatabase
+import com.jynx.scrollite.data.Platform
+import com.jynx.scrollite.data.ReelEntry
+import com.jynx.scrollite.data.ReelsRepository
+import com.jynx.scrollite.data.RoomReelsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class ReelsAccessibilityService : AccessibilityService() {
 
@@ -30,6 +40,17 @@ class ReelsAccessibilityService : AccessibilityService() {
     // TEMP: UI exploration, remove before production
     private var lastDumpMs = 0L
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val repository: ReelsRepository by lazy {
+        RoomReelsRepository(AppDatabase.getInstance(applicationContext).reelDao())
+    }
+
+    // Interim de-dup heuristic: insert only when the username changes from the
+    // last inserted one. Not real debounce (won't handle scrolling back to a
+    // previous Reel, rapid re-scrolls, etc.) — a placeholder until a proper
+    // "confirmed new Reel" trigger exists.
+    private var lastInsertedUsername: String? = null
+
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         Log.d(TAG, "eventType=${AccessibilityEvent.eventTypeToString(event.eventType)} pkg=${event.packageName}")
 
@@ -40,6 +61,24 @@ class ReelsAccessibilityService : AccessibilityService() {
         // Detection runs first — dumpNodeTree recycles root, so it must go last
         val (isReels, matchCount, totalSignals) = isReelsScreen(root)
         Log.d(TAG, "isReels=$isReels matchCount=$matchCount totalSignals=$totalSignals")
+
+        if (isReels) {
+            val username = extractUsername(root)
+            Log.d(TAG, "REELS DETECTED username=$username") // TEMP: verify username extraction, remove before production
+
+            if (username != null && username != lastInsertedUsername) {
+                lastInsertedUsername = username
+                val entry = ReelEntry(
+                    username = username,
+                    caption = null, // not yet extracted (Person 1)
+                    hashtags = emptyList(), // not yet extracted (Person 1)
+                    screenshotPath = null, // capture not yet built
+                    platform = Platform.INSTAGRAM, // only Instagram is detected today
+                    timestamp = System.currentTimeMillis(),
+                )
+                serviceScope.launch { repository.insert(entry) }
+            }
+        }
 
         // TEMP: UI exploration, remove before production
         val now = System.currentTimeMillis()
@@ -83,6 +122,22 @@ class ReelsAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Reads the author username text off the clips_author_username node.
+     * recycle() is a no-op on API 33+ (pool removed) but still matters on
+     * this app's minSdk 26-32 range, so it's called unconditionally.
+     */
+    private fun extractUsername(root: AccessibilityNodeInfo): String? {
+        val nodes = root.findAccessibilityNodeInfosByViewId(ID_AUTHOR_USERNAME)
+        try {
+            return nodes.firstOrNull { it.isVisibleToUser }
+                ?.text?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() }
+        } finally {
+            nodes.forEach { it.recycle() }
+        }
+    }
+
+    /**
      * Recursively search for UI elements with specific text content descriptions
      *
      * Can be used to find buttons/icons by text description
@@ -105,6 +160,11 @@ class ReelsAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
+
+    override fun onDestroy() {
+        super.onDestroy()
+        serviceScope.cancel()
+    }
 
     // TEMP: UI exploration, remove before production
     private fun dumpNodeTree(node: AccessibilityNodeInfo?, depth: Int) {
