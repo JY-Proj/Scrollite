@@ -9,10 +9,23 @@ import android.os.Looper
 import android.graphics.Bitmap
 import android.os.Build
 import android.view.Display
+
+import com.jynx.scrollite.data.AppDatabase
+import com.jynx.scrollite.data.Platform
+import com.jynx.scrollite.data.ReelEntry
+import com.jynx.scrollite.data.ReelsRepository
+import com.jynx.scrollite.data.RoomReelsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+
 // for later
 import android.accessibilityservice.AccessibilityService.ScreenshotResult
 import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
 import android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK
+
 class ReelsAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -45,6 +58,17 @@ class ReelsAccessibilityService : AccessibilityService() {
     // TEMP: UI exploration, remove before production
     private var lastDumpMs = 0L
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val repository: ReelsRepository by lazy {
+        RoomReelsRepository(AppDatabase.getInstance(applicationContext).reelDao(), applicationContext)
+    }
+
+    // Interim de-dup heuristic: insert only when the username changes from the
+    // last inserted one. Not real debounce (won't handle scrolling back to a
+    // previous Reel, rapid re-scrolls, etc.) — a placeholder until a proper
+    // "confirmed new Reel" trigger exists.
+    private var lastInsertedUsername: String? = null
+
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         Log.d(TAG, "eventType=${AccessibilityEvent.eventTypeToString(event.eventType)} pkg=${event.packageName}")
 
@@ -56,6 +80,18 @@ class ReelsAccessibilityService : AccessibilityService() {
         val (isReels, matchCount, totalSignals) = isReelsScreen(root)
         Log.d(TAG, "isReels=$isReels matchCount=$matchCount totalSignals=$totalSignals")
 
+        if (isReels) {
+            val username = extractUsername(root)
+            Log.d(TAG, "REELS DETECTED username=$username") // TEMP: verify username extraction, remove before production
+
+            if (username != null && username != lastInsertedUsername) {
+                lastInsertedUsername = username
+                scheduleExtraction()
+            }
+        }  else {
+            debounceRunnable?.let { debounceHandler.removeCallbacks(it) }
+        }
+
         // TEMP: UI exploration, remove before production
         val now = System.currentTimeMillis()
         if (now - lastDumpMs >= DUMP_INTERVAL_MS) {
@@ -65,11 +101,6 @@ class ReelsAccessibilityService : AccessibilityService() {
             root.recycle()
         }
 
-        if (isReels) {
-            scheduleExtraction()
-        } else {
-            debounceRunnable?.let { debounceHandler.removeCallbacks(it) }
-        }
     }
 
     /**
@@ -80,11 +111,34 @@ class ReelsAccessibilityService : AccessibilityService() {
     private fun scheduleExtraction() {
         debounceRunnable?.let { debounceHandler.removeCallbacks(it) }
         val runnable = Runnable {
-            val freshRoot = rootInActiveWindow ?: return@Runnable // re-fetch, don't reuse old root
+            val freshRoot = rootInActiveWindow ?: return@Runnable
+
+            // Re-check everything against the settled screen — the username
+            // that triggered this might have already changed if the user
+            // kept scrolling during the 400ms debounce window.
+            val (stillReels, _, _) = isReelsScreen(freshRoot)
+            if (!stillReels) { freshRoot.recycle(); return@Runnable }
+
+            val username = extractUsername(freshRoot)
             val caption = extractCaption(freshRoot)
             val hashtags = extractHashtags(caption)
-            Log.d(TAG, "caption=$caption hashtags=$hashtags")
-            triggerScreenshot()
+            Log.d(TAG, "extracted username=$username caption=$caption hashtags=$hashtags")
+
+            if (username != null) {
+                val entry = ReelEntry(
+                    username = username,
+                    caption = caption,
+                    hashtags = hashtags,
+                    screenshotPath = null, // filled in after screenshot resolves
+                    platform = Platform.INSTAGRAM,
+                    timestamp = System.currentTimeMillis(),
+                )
+                serviceScope.launch {
+                    val rowId = repository.insert(entry) // needs to return the new row's id
+                    triggerScreenshot(rowId)
+                }
+            }
+
             freshRoot.recycle()
         }
         debounceRunnable = runnable
@@ -96,12 +150,11 @@ class ReelsAccessibilityService : AccessibilityService() {
      * handled asynchronously via callback. Never throws — failures are
      * logged and skipped, since this is a nice-to-have, not core detection.
      */
-    private fun triggerScreenshot() {
+    private fun triggerScreenshot(rowId: Long) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            Log.d(TAG, "Skipping screenshot: takeScreenshot() requires API 30+, device is ${Build.VERSION.SDK_INT}")
+            Log.d(TAG, "Skipping screenshot: requires API 30+")
             return
         }
-
         takeScreenshot(
             Display.DEFAULT_DISPLAY,
             mainExecutor,
@@ -113,23 +166,16 @@ class ReelsAccessibilityService : AccessibilityService() {
                         Log.w(TAG, "Failed to wrap screenshot buffer: ${e.message}")
                         null
                     } finally {
-                        result.hardwareBuffer.close() // must always close, success or failure
+                        result.hardwareBuffer.close()
                     }
-
                     if (bitmap == null) return
-                    Log.d(TAG, "Screenshot captured: ${bitmap.width}x${bitmap.height}")
-                    // Hand off to Person 2's storage code here, e.g.:
-                    // onScreenshotCaptured(bitmap)
-                }
-
-                override fun onFailure(errorCode: Int) {
-                    val reason = when (errorCode) {
-                        ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT -> "called too soon after previous screenshot"
-                        ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY -> "invalid display"
-                        ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR -> "internal error"
-                        else -> "unknown error code=$errorCode"
+                    serviceScope.launch {
+                        val path = repository.saveScreenshot(rowId, bitmap) // Person 2's function
+                        repository.updateScreenshotPath(rowId, path)
                     }
-                    Log.w(TAG, "Screenshot failed: $reason")
+                }
+                override fun onFailure(errorCode: Int) {
+                    Log.w(TAG, "Screenshot failed, errorCode=$errorCode")
                 }
             }
         )
@@ -194,6 +240,22 @@ class ReelsAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Reads the author username text off the clips_author_username node.
+     * recycle() is a no-op on API 33+ (pool removed) but still matters on
+     * this app's minSdk 26-32 range, so it's called unconditionally.
+     */
+    private fun extractUsername(root: AccessibilityNodeInfo): String? {
+        val nodes = root.findAccessibilityNodeInfosByViewId(ID_AUTHOR_USERNAME)
+        try {
+            return nodes.firstOrNull { it.isVisibleToUser }
+                ?.text?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() }
+        } finally {
+            nodes.forEach { it.recycle() }
+        }
+    }
+
+    /**
      * Recursively search for UI elements with specific text content descriptions
      *
      * Can be used to find buttons/icons by text description
@@ -216,6 +278,11 @@ class ReelsAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
+
+    override fun onDestroy() {
+        super.onDestroy()
+        serviceScope.cancel()
+    }
 
     // TEMP: UI exploration, remove before production
     private fun dumpNodeTree(node: AccessibilityNodeInfo?, depth: Int) {
