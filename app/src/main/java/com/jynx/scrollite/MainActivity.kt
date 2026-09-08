@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     val context = LocalContext.current
                     val repository = remember {
-                        RoomReelsRepository(AppDatabase.getInstance(context).reelDao())
+                        RoomReelsRepository(AppDatabase.getInstance(context).reelDao(), context)
                     }
                     val viewModel: ReelsListViewModel = viewModel(
                         factory = ReelsListViewModel.Factory(repository)

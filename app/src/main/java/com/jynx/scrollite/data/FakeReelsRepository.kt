@@ -4,13 +4,15 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
-class FakeReelsRepository(context: Context) : ReelsRepository {
+class FakeReelsRepository(private val context: Context) : ReelsRepository {
 
     private val now = System.currentTimeMillis()
 
@@ -51,8 +53,25 @@ class FakeReelsRepository(context: Context) : ReelsRepository {
 
     override fun observeAll(): Flow<List<ReelEntry>> = entries.asStateFlow()
 
-    override suspend fun insert(entry: ReelEntry) {
-        entries.value = listOf(entry) + entries.value
+    override suspend fun insert(entry: ReelEntry): Long {
+        val newId = (entries.value.maxOfOrNull { it.id } ?: 0) + 1
+        val newEntry = entry.copy(id = newId)
+        entries.value = listOf(newEntry) + entries.value
+        return newId
+    }
+
+    override suspend fun saveScreenshot(rowId: Long, bitmap: Bitmap): String = withContext(Dispatchers.IO) {
+        val file = File(context.filesDir, "screenshot_$rowId.jpg")
+        FileOutputStream(file).use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        }
+        file.absolutePath
+    }
+
+    override suspend fun updateScreenshotPath(rowId: Long, path: String) {
+        entries.value = entries.value.map {
+            if (it.id == rowId) it.copy(screenshotPath = path) else it
+        }
     }
 
     private fun writeFakeThumbnail(context: Context): String {
