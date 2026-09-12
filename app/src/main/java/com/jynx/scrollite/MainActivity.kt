@@ -16,10 +16,19 @@ import com.jynx.scrollite.data.RoomReelsRepository
 import com.jynx.scrollite.ui.reels.ReelsListScreen
 import com.jynx.scrollite.ui.reels.ReelsListViewModel
 import com.jynx.scrollite.ui.theme.ScrolliteTheme
+import android.Manifest
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
 
 class MainActivity : ComponentActivity() {
+    private val requestNotificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()){
+
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU){
+            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         enableEdgeToEdge()
         setContent {
             ScrolliteTheme {
