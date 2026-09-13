@@ -9,6 +9,13 @@ import android.os.Looper
 import android.graphics.Bitmap
 import android.os.Build
 import android.view.Display
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.pm.PackageManager
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 
 import com.jynx.scrollite.data.AppDatabase
 import com.jynx.scrollite.data.Platform
@@ -25,6 +32,8 @@ import kotlinx.coroutines.launch
 import android.accessibilityservice.AccessibilityService.ScreenshotResult
 import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
 import android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK
+import android.os.SystemClock
+import com.jynx.scrollite.data.ScreenTimeStore
 
 class ReelsAccessibilityService : AccessibilityService() {
 
@@ -49,6 +58,10 @@ class ReelsAccessibilityService : AccessibilityService() {
         // caption extraction
         private const val ID_CAPTION_COMPONENT = "com.instagram.android:id/clips_caption_component"
         private const val DEBOUNCE_MS = 400L
+
+        //notification limits
+        private const val LIMIT_CHANNEL_ID = "reels_limit_channel"
+        private const val LIMIT_NOTIFICATION_ID = 1001
     }
 
     // Debounce
@@ -69,16 +82,25 @@ class ReelsAccessibilityService : AccessibilityService() {
     // "confirmed new Reel" trigger exists.
     private var lastInsertedUsername: String? = null
 
+    //keep track of whether it is in reels session
+    private var isReelsSession = false
+    private var sessionStartElapsed = 0L
+
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         Log.d(TAG, "eventType=${AccessibilityEvent.eventTypeToString(event.eventType)} pkg=${event.packageName}")
 
-        if (event.packageName != INSTAGRAM_PKG) return // TODO: add more later as we are not only limited to Instagram
-
+        if (event.packageName != INSTAGRAM_PKG) {
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED){
+                stopReelsTiming()
+            }
+            return // TODO: add more later as we are not only limited to Instagram
+        }
         val root = rootInActiveWindow ?: return
 
         // Detection runs first — dumpNodeTree recycles root, so it must go last
         val (isReels, matchCount, totalSignals) = isReelsScreen(root)
         Log.d(TAG, "isReels=$isReels matchCount=$matchCount totalSignals=$totalSignals")
+        updateReelsTiming(isReels)
 
         if (isReels) {
             val username = extractUsername(root)
@@ -101,6 +123,16 @@ class ReelsAccessibilityService : AccessibilityService() {
             root.recycle()
         }
 
+    }
+
+    override fun onServiceConnected(){
+        super.onServiceConnected()
+        val channel = NotificationChannel(
+            LIMIT_CHANNEL_ID,
+            "Reels time limit",
+            NotificationManager.IMPORTANCE_DEFAULT
+        )
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     /**
@@ -280,6 +312,7 @@ class ReelsAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        stopReelsTiming()
         super.onDestroy()
         serviceScope.cancel()
     }
@@ -302,5 +335,56 @@ class ReelsAccessibilityService : AccessibilityService() {
 
         node.recycle()
     }
+
+    //Lazy so applicationContext access happens after service creation
+    private val screenTimeStore: ScreenTimeStore by lazy {
+        ScreenTimeStore(applicationContext)
+    }
+
+    private fun updateReelsTiming(isReels: Boolean){
+        if (isReels && !isReelsSession){
+            isReelsSession = true
+            sessionStartElapsed = SystemClock.elapsedRealtime()
+        }else if (!isReels && isReelsSession){
+            stopReelsTiming()
+        }
+    }
+
+    private fun stopReelsTiming(){
+        if (!isReelsSession) return
+        isReelsSession = false
+        val delta = SystemClock.elapsedRealtime() - sessionStartElapsed
+        serviceScope.launch {
+            screenTimeStore.addElapsedTime(delta)
+            checkDailyLimit()
+        }
+    }
+
+    private suspend fun checkDailyLimit(){
+        if (screenTimeStore.isNotifiedToday()) return
+        val totalMs = screenTimeStore.getTodayTotal()
+        val limitMs = screenTimeStore.getDailyLimit() * 60_000L
+        if (totalMs >= limitMs) {
+            showLimitNotification()
+            screenTimeStore.setNotifiedToday(true)
+        }
+    }
+    private fun showLimitNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "Skipping limit notification: POST_NOTIFICATIONS not granted")
+            return
+        }
+        val notification = NotificationCompat.Builder(this, LIMIT_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info) // TEMP placeholder icon, swap for a real one
+            .setContentTitle("Daily Reels limit reached")
+            .setContentText("You've hit your daily Reels watch time limit.")
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(this).notify(LIMIT_NOTIFICATION_ID, notification)
+    }
+
 
 }
