@@ -6,6 +6,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.graphics.Bitmap
 import android.os.Build
 import android.view.Display
@@ -22,6 +23,7 @@ import com.jynx.scrollite.data.Platform
 import com.jynx.scrollite.data.ReelEntry
 import com.jynx.scrollite.data.ReelsRepository
 import com.jynx.scrollite.data.RoomReelsRepository
+import com.jynx.scrollite.data.ScreenTimeStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,8 +34,6 @@ import kotlinx.coroutines.launch
 import android.accessibilityservice.AccessibilityService.ScreenshotResult
 import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
 import android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK
-import android.os.SystemClock
-import com.jynx.scrollite.data.ScreenTimeStore
 
 class ReelsAccessibilityService : AccessibilityService() {
 
@@ -361,7 +361,7 @@ class ReelsAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun checkDailyLimit(){
-        if (screenTimeStore.isNotifiedToday()) return
+       // if (screenTimeStore.isNotifiedToday()) return
         val totalMs = screenTimeStore.getTodayTotal()
         val limitMs = screenTimeStore.getDailyLimit() * 60_000L
         if (totalMs >= limitMs) {
@@ -379,8 +379,8 @@ class ReelsAccessibilityService : AccessibilityService() {
         }
         val notification = NotificationCompat.Builder(this, LIMIT_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info) // TEMP placeholder icon, swap for a real one
-            .setContentTitle("Daily Reels limit reached")
-            .setContentText("You've hit your daily Reels watch time limit.")
+            .setContentTitle("Daily Short-Form Content limit reached")
+            .setContentText("You've hit your daily Short-Form Content watch time limit.")
             .setAutoCancel(true)
             .build()
         NotificationManagerCompat.from(this).notify(LIMIT_NOTIFICATION_ID, notification)
