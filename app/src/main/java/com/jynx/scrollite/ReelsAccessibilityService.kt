@@ -62,6 +62,10 @@ class ReelsAccessibilityService : AccessibilityService() {
         //notification limits
         private const val LIMIT_CHANNEL_ID = "reels_limit_channel"
         private const val LIMIT_NOTIFICATION_ID = 1001
+        
+        // Instagram feed
+        private const val ID_FEED_TAB = "com.instagram.android:id/feed_tab"
+        private const val LAUNCH_REDIRECT_DELAY_MS = 500L // give the UI time to render before clicking
     }
 
     // Debounce
@@ -85,10 +89,26 @@ class ReelsAccessibilityService : AccessibilityService() {
     //keep track of whether it is in reels session
     private var isReelsSession = false
     private var sessionStartElapsed = 0L
+    private var lastForegroundPackage: String? = null
+
+
+    private var todayTotalAtSessionStart = 0L
+    private var cachedDailyLimitMs = Long.MAX_VALUE // safe default until loaded
+    private var hasBumpedThisSession = false
+
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         Log.d(TAG, "eventType=${AccessibilityEvent.eventTypeToString(event.eventType)} pkg=${event.packageName}")
 
+//        val currentPackage = event.packageName?.toString()
+//        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+//            currentPackage == INSTAGRAM_PKG &&
+//            lastForegroundPackage != INSTAGRAM_PKG &&
+//            todayTotalAtSessionStart >= cachedDailyLimitMs
+//        ) {
+//            Log.d(TAG, "Instagram just came to foreground — will force-redirect to Feed")
+//            forceRedirectToFeed()
+//        }
         if (event.packageName != INSTAGRAM_PKG) {
             if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED){
                 stopReelsTiming()
@@ -124,6 +144,19 @@ class ReelsAccessibilityService : AccessibilityService() {
         }
 
     }
+
+//    private fun forceRedirectToFeed() {
+//        debounceHandler.postDelayed({
+//            val root = rootInActiveWindow
+//            val feedTab = root?.findAccessibilityNodeInfosByViewId(ID_FEED_TAB)?.firstOrNull()
+//            if (feedTab != null) {
+//                feedTab.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+//                Log.d(TAG, "Redirected to Feed tab on launch")
+//            } else {
+//                Log.w(TAG, "feed_tab not found on launch — UI may not have loaded yet")
+//            }
+//        }, LAUNCH_REDIRECT_DELAY_MS)
+//    }
 
     override fun onServiceConnected(){
         super.onServiceConnected()
@@ -341,13 +374,47 @@ class ReelsAccessibilityService : AccessibilityService() {
         ScreenTimeStore(applicationContext)
     }
 
-    private fun updateReelsTiming(isReels: Boolean){
-        if (isReels && !isReelsSession){
+    private fun updateReelsTiming(isReels: Boolean) {
+        if (isReels && !isReelsSession) {
             isReelsSession = true
             sessionStartElapsed = SystemClock.elapsedRealtime()
-        }else if (!isReels && isReelsSession){
+            hasBumpedThisSession = false
+            serviceScope.launch {
+                todayTotalAtSessionStart = screenTimeStore.getTodayTotal()
+                cachedDailyLimitMs = screenTimeStore.getDailyLimit() * 60_000L
+            }
+        } else if (isReels && isReelsSession) {
+            checkLimitDuringSession()
+        } else if (!isReels && isReelsSession) {
             stopReelsTiming()
         }
+    }
+
+    private fun checkLimitDuringSession() {
+        if (hasBumpedThisSession) return // don't spam performGlobalAction every event
+        val elapsedInSession = SystemClock.elapsedRealtime() - sessionStartElapsed
+        val projectedTotal = todayTotalAtSessionStart + elapsedInSession
+        if (projectedTotal >= cachedDailyLimitMs) {
+            bumpUserOutOfReels()
+        }
+    }
+
+    private fun bumpUserOutOfReels() {
+        hasBumpedThisSession = true
+        Log.d(TAG, "Daily limit exceeded mid-session — navigating to Feed tab")
+
+        val root = rootInActiveWindow
+        val feedTab = root?.findAccessibilityNodeInfosByViewId(ID_FEED_TAB)?.firstOrNull()
+
+        if (feedTab != null) {
+            feedTab.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } else {
+            Log.w(TAG, "Couldn't find feed_tab node")
+            //performGlobalAction(GLOBAL_ACTION_HOME)
+            performGlobalAction(GLOBAL_ACTION_BACK) // Swipe right
+        }
+
+        stopReelsTiming()
     }
 
     private fun stopReelsTiming(){
