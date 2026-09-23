@@ -26,6 +26,7 @@ import com.jynx.scrollite.data.RoomReelsRepository
 import com.jynx.scrollite.data.ScreenTimeStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -66,11 +67,21 @@ class ReelsAccessibilityService : AccessibilityService() {
         // Instagram feed
         private const val ID_FEED_TAB = "com.instagram.android:id/feed_tab"
         private const val LAUNCH_REDIRECT_DELAY_MS = 500L // give the UI time to render before clicking
+
+        // isReelsScreen() flickers false for single frames during normal scrolling
+        // (23 false readings observed within 86ms in one real session) — only treat
+        // it as "actually left Reels" if it stays false for this long.
+        private const val SESSION_STOP_DEBOUNCE_MS = 500L
+
+        // Eject verification/retry
+        private const val EJECT_VERIFY_DELAY_MS = 300L
+        private const val MAX_EJECT_ATTEMPTS = 3
     }
 
     // Debounce
     private val debounceHandler = Handler(Looper.getMainLooper())
     private var debounceRunnable: Runnable? = null
+    private var pendingStopRunnable: Runnable? = null
 
     // TEMP: UI exploration, remove before production
     private var lastDumpMs = 0L
@@ -95,6 +106,7 @@ class ReelsAccessibilityService : AccessibilityService() {
     private var todayTotalAtSessionStart = 0L
     private var cachedDailyLimitMs = Long.MAX_VALUE // safe default until loaded
     private var hasBumpedThisSession = false
+    private var limitStateLoadJob: Job? = null
 
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -111,6 +123,8 @@ class ReelsAccessibilityService : AccessibilityService() {
 //        }
         if (event.packageName != INSTAGRAM_PKG) {
             if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED){
+                pendingStopRunnable?.let { debounceHandler.removeCallbacks(it) }
+                pendingStopRunnable = null
                 stopReelsTiming()
             }
             return // TODO: add more later as we are not only limited to Instagram
@@ -345,6 +359,8 @@ class ReelsAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        pendingStopRunnable?.let { debounceHandler.removeCallbacks(it) }
+        pendingStopRunnable = null
         stopReelsTiming()
         super.onDestroy()
         serviceScope.cancel()
@@ -375,18 +391,44 @@ class ReelsAccessibilityService : AccessibilityService() {
     }
 
     private fun updateReelsTiming(isReels: Boolean) {
-        if (isReels && !isReelsSession) {
-            isReelsSession = true
-            sessionStartElapsed = SystemClock.elapsedRealtime()
-            hasBumpedThisSession = false
-            serviceScope.launch {
-                todayTotalAtSessionStart = screenTimeStore.getTodayTotal()
-                cachedDailyLimitMs = screenTimeStore.getDailyLimit() * 60_000L
+        if (isReels) {
+            // We're on Reels (still, or again after a brief flicker) — cancel any
+            // debounced stop so a single-frame false reading doesn't tear the
+            // session down and reset the limit state mid-watch.
+            pendingStopRunnable?.let { debounceHandler.removeCallbacks(it) }
+            pendingStopRunnable = null
+
+            if (!isReelsSession) {
+                isReelsSession = true
+                sessionStartElapsed = SystemClock.elapsedRealtime()
+                hasBumpedThisSession = false
+                loadSessionLimitState()
+            } else {
+                checkLimitDuringSession()
             }
-        } else if (isReels && isReelsSession) {
-            checkLimitDuringSession()
-        } else if (!isReels && isReelsSession) {
-            stopReelsTiming()
+        } else if (isReelsSession && pendingStopRunnable == null) {
+            val runnable = Runnable {
+                pendingStopRunnable = null
+                stopReelsTiming()
+            }
+            pendingStopRunnable = runnable
+            debounceHandler.postDelayed(runnable, SESSION_STOP_DEBOUNCE_MS)
+        }
+    }
+
+    /**
+     * Loads the values checkLimitDuringSession() compares against for this
+     * session. Cancels any load still in flight from a session that just
+     * ended (e.g. a rapid stop/restart from detection flicker) so a stale
+     * result can't land after this one and overwrite it with old data.
+     */
+    private fun loadSessionLimitState() {
+        limitStateLoadJob?.cancel()
+        limitStateLoadJob = serviceScope.launch {
+            val total = screenTimeStore.getTodayTotal()
+            val limit = screenTimeStore.getDailyLimit() * 60_000L
+            todayTotalAtSessionStart = total
+            cachedDailyLimitMs = limit
         }
     }
 
@@ -401,25 +443,42 @@ class ReelsAccessibilityService : AccessibilityService() {
 
     private fun bumpUserOutOfReels() {
         hasBumpedThisSession = true
-        Log.d(TAG, "Daily limit exceeded mid-session — navigating to Feed tab")
+        Log.d(TAG, "Daily limit exceeded mid-session — ejecting from Reels")
+        attemptEject(attempt = 1)
+    }
 
-        val root = rootInActiveWindow
-        val feedTab = root?.findAccessibilityNodeInfosByViewId(ID_FEED_TAB)?.firstOrNull()
+    /**
+     * feed_tab (bottom nav) isn't present in the accessibility tree while the
+     * Reels player is full-screen, so clicking it never has anything to find —
+     * confirmed via logcat: it only ever appears in dumps taken on the Home
+     * Feed screen. GLOBAL_ACTION_BACK is what actually has a chance of
+     * working, but Instagram sometimes swallows it (e.g. to close an overlay)
+     * instead of leaving Reels, so we verify and retry.
+     */
+    private fun attemptEject(attempt: Int) {
+        performGlobalAction(GLOBAL_ACTION_BACK)
 
-        if (feedTab != null) {
-            feedTab.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        } else {
-            Log.w(TAG, "Couldn't find feed_tab node")
-            //performGlobalAction(GLOBAL_ACTION_HOME)
-            performGlobalAction(GLOBAL_ACTION_BACK) // Swipe right
-        }
+        debounceHandler.postDelayed({
+            val root = rootInActiveWindow
+            val stillInReels = root != null && isReelsScreen(root).first
+            root?.recycle()
 
-        stopReelsTiming()
+            if (!stillInReels) {
+                stopReelsTiming()
+            } else if (attempt < MAX_EJECT_ATTEMPTS) {
+                Log.w(TAG, "Eject attempt $attempt still in Reels — retrying")
+                attemptEject(attempt + 1)
+            } else {
+                Log.w(TAG, "Eject failed after $MAX_EJECT_ATTEMPTS attempts, giving up for this session")
+                stopReelsTiming()
+            }
+        }, EJECT_VERIFY_DELAY_MS)
     }
 
     private fun stopReelsTiming(){
         if (!isReelsSession) return
         isReelsSession = false
+        limitStateLoadJob?.cancel()
         val delta = SystemClock.elapsedRealtime() - sessionStartElapsed
         serviceScope.launch {
             screenTimeStore.addElapsedTime(delta)
