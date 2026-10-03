@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Clickable so touches are consumed here instead of reaching the Reel underneath -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/limit_overlay_scrim"
+    android:clickable="true"
+    android:focusable="false">
+
+    <!-- Main "time's up" content -->
+    <LinearLayout
+        android:id="@+id/limit_main_group"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingStart="32dp"
+        android:paddingEnd="32dp">
+
+        <ImageView
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_limit_timer" />
+
+        <TextView
+            android:id="@+id/limit_title"
+            style="@style/LimitOverlay.Title"
+            android:layout_marginTop="24dp" />
+
+        <TextView
+            android:id="@+id/limit_body"
+            style="@style/LimitOverlay.Body" />
+
+        <TextView
+            android:id="@+id/limit_button"
+            style="@style/LimitOverlay.Button"
+            android:layout_width="match_parent"
+            android:layout_marginTop="40dp" />
+
+        <TextView
+            android:id="@+id/limit_extend_link"
+            style="@style/LimitOverlay.Link"
+            android:text="@string/limit_overlay_extend_link"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- Extension flow: a short wait before the extra-time options unlock -->
+    <LinearLayout
+        android:id="@+id/limit_extend_group"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingStart="32dp"
+        android:paddingEnd="32dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/limit_extend_title"
+            style="@style/LimitOverlay.Title"
+            android:text="@string/limit_overlay_extend_title" />
+
+        <TextView
+            android:id="@+id/limit_extend_body"
+            style="@style/LimitOverlay.Body" />
+
+        <!-- Leaving stays the primary action even here; extra time is the quiet option -->
+        <TextView
+            android:id="@+id/limit_extend_cancel"
+            style="@style/LimitOverlay.Button"
+            android:layout_width="match_parent"
+            android:layout_marginTop="40dp"
+            android:text="@string/limit_overlay_extend_cancel" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/limit_extend_short"
+                style="@style/LimitOverlay.Link"
+                android:enabled="false" />
+
+            <TextView
+                android:id="@+id/limit_extend_long"
+                style="@style/LimitOverlay.Link"
+                android:layout_marginStart="16dp"
+                android:enabled="false" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/limit_extend_status"
+            style="@style/LimitOverlay.Body"
+            android:layout_marginTop="0dp"
+            android:accessibilityLiveRegion="polite"
+            android:textSize="13sp" />
+    </LinearLayout>
+</FrameLayout>

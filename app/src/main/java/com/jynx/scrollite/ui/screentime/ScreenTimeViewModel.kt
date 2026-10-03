@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.jynx.scrollite.data.ScreenTimeStore
+import com.jynx.scrollite.data.Strictness
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -27,6 +28,13 @@ class ScreenTimeViewModel(private val store: ScreenTimeStore) : ViewModel() {
     val dailyLimitMinutes: StateFlow<Int> = store.dailyLimitFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
+    val strictness: StateFlow<Strictness> = store.strictnessFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), Strictness.DEFAULT)
+
+    /** A looser choice that only takes effect tomorrow; null when nothing is scheduled. */
+    val pendingStrictness: StateFlow<Strictness?> = store.pendingStrictnessFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     val uiState: StateFlow<ScreenTimeUiState> =
         combine(store.todayTotalFlow, store.dailyLimitFlow) { totalMillis, limitMinutes ->
             ScreenTimeUiState(
@@ -38,6 +46,10 @@ class ScreenTimeViewModel(private val store: ScreenTimeStore) : ViewModel() {
 
     fun setDailyLimit(minutes: Int) {
         viewModelScope.launch { store.setDailyLimit(minutes) }
+    }
+
+    fun setStrictness(strictness: Strictness) {
+        viewModelScope.launch { store.setStrictness(strictness) }
     }
 
     /**

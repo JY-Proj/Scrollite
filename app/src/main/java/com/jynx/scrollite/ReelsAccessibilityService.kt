@@ -24,6 +24,8 @@ import com.jynx.scrollite.data.ReelEntry
 import com.jynx.scrollite.data.ReelsRepository
 import com.jynx.scrollite.data.RoomReelsRepository
 import com.jynx.scrollite.data.ScreenTimeStore
+import com.jynx.scrollite.ui.limit.LimitOverlay
+import com.jynx.scrollite.ui.limit.LimitOverlaySpec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -105,12 +107,33 @@ class ReelsAccessibilityService : AccessibilityService() {
 
     private var todayTotalAtSessionStart = 0L
     private var cachedDailyLimitMs = Long.MAX_VALUE // safe default until loaded
+    private var cachedExtensionMs = 0L
+    private var cachedExtensionsUsed = 0
+    private var cachedMaxExtensions = 0
     private var hasBumpedThisSession = false
     private var limitStateLoadJob: Job? = null
+
+    private val limitOverlay by lazy { LimitOverlay(this) }
 
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         Log.d(TAG, "eventType=${AccessibilityEvent.eventTypeToString(event.eventType)} pkg=${event.packageName}")
+
+        // Our own overlay window fires events too. Without this, showing it would
+        // look like the user left Instagram (the non-Instagram branch below).
+        if (event.packageName == packageName) return
+
+        // Timing is already committed and the eject is owned by the overlay flow,
+        // so ignore everything except the user leaving for another app — then
+        // there's nothing left to eject from, so just take the overlay down.
+        if (limitOverlay.isShowing) {
+            if (event.packageName != INSTAGRAM_PKG &&
+                event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+            ) {
+                limitOverlay.dismiss()
+            }
+            return
+        }
 
 //        val currentPackage = event.packageName?.toString()
 //        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
@@ -359,6 +382,8 @@ class ReelsAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        // Otherwise a service disabled mid-countdown leaves the overlay stuck on screen
+        limitOverlay.removeNow()
         pendingStopRunnable?.let { debounceHandler.removeCallbacks(it) }
         pendingStopRunnable = null
         stopReelsTiming()
@@ -427,24 +452,72 @@ class ReelsAccessibilityService : AccessibilityService() {
         limitStateLoadJob = serviceScope.launch {
             val total = screenTimeStore.getTodayTotal()
             val limit = screenTimeStore.getDailyLimit() * 60_000L
+            val extension = screenTimeStore.getExtensionToday()
+            val extensionsUsed = screenTimeStore.getExtensionsUsedToday()
+            val maxExtensions = screenTimeStore.getStrictness().maxExtensionsPerDay
             todayTotalAtSessionStart = total
-            cachedDailyLimitMs = limit
+            cachedMaxExtensions = maxExtensions
+            cachedExtensionMs = extension
+            cachedExtensionsUsed = extensionsUsed
+            cachedDailyLimitMs = limit // written last — it's what arms checkLimitDuringSession()
         }
     }
+
+    /** The daily limit plus any extra time granted today. */
+    private fun effectiveLimitMs(): Long =
+        if (cachedDailyLimitMs == Long.MAX_VALUE) Long.MAX_VALUE else cachedDailyLimitMs + cachedExtensionMs
 
     private fun checkLimitDuringSession() {
         if (hasBumpedThisSession) return // don't spam performGlobalAction every event
         val elapsedInSession = SystemClock.elapsedRealtime() - sessionStartElapsed
         val projectedTotal = todayTotalAtSessionStart + elapsedInSession
-        if (projectedTotal >= cachedDailyLimitMs) {
-            bumpUserOutOfReels()
+        if (projectedTotal >= effectiveLimitMs()) {
+            bumpUserOutOfReels(projectedTotal)
         }
     }
 
-    private fun bumpUserOutOfReels() {
+    /**
+     * Shows the limit overlay first and only ejects once its countdown ends
+     * (or the user taps through), so the bump doesn't feel abrupt. The eject
+     * happens behind the overlay, which is removed once it's verified.
+     */
+    private fun bumpUserOutOfReels(watchedMs: Long) {
         hasBumpedThisSession = true
-        Log.d(TAG, "Daily limit exceeded mid-session — ejecting from Reels")
-        attemptEject(attempt = 1)
+        val spec = LimitOverlaySpec.forBump(
+            watchedMs = watchedMs,
+            limitMs = cachedDailyLimitMs,
+            extraMs = cachedExtensionMs,
+            extensionsUsedToday = cachedExtensionsUsed,
+            maxExtensionsPerDay = cachedMaxExtensions,
+            alreadyOverAtSessionStart = todayTotalAtSessionStart >= effectiveLimitMs(),
+        )
+        Log.d(TAG, "Daily limit exceeded mid-session — showing ${spec.variant} overlay before eject")
+
+        // Commit watch time up to now so the countdown itself isn't counted as Reels time
+        pendingStopRunnable?.let { debounceHandler.removeCallbacks(it) }
+        pendingStopRunnable = null
+        debounceRunnable?.let { debounceHandler.removeCallbacks(it) }
+        stopReelsTiming()
+
+        limitOverlay.show(
+            spec,
+            onLeave = { attemptEject(attempt = 1) },
+            onExtend = { minutes -> grantExtension(minutes) },
+        )
+    }
+
+    /**
+     * Saves the extension before taking the overlay down: once it's gone the
+     * next Reels event starts a fresh session that reloads the limit state,
+     * and it must see the extra time or it would bump the user straight back.
+     * (Events are ignored while the overlay is up, so nothing races this.)
+     */
+    private fun grantExtension(minutes: Int) {
+        Log.d(TAG, "User extended limit by $minutes min (extensions used today before this: $cachedExtensionsUsed)")
+        serviceScope.launch(Dispatchers.Main) {
+            screenTimeStore.grantExtension(minutes * 60_000L)
+            limitOverlay.dismiss()
+        }
     }
 
     /**
@@ -465,12 +538,14 @@ class ReelsAccessibilityService : AccessibilityService() {
 
             if (!stillInReels) {
                 stopReelsTiming()
+                limitOverlay.dismiss()
             } else if (attempt < MAX_EJECT_ATTEMPTS) {
                 Log.w(TAG, "Eject attempt $attempt still in Reels — retrying")
                 attemptEject(attempt + 1)
             } else {
                 Log.w(TAG, "Eject failed after $MAX_EJECT_ATTEMPTS attempts, giving up for this session")
                 stopReelsTiming()
+                limitOverlay.dismiss()
             }
         }, EJECT_VERIFY_DELAY_MS)
     }
@@ -487,7 +562,9 @@ class ReelsAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun checkDailyLimit(){
-       // if (screenTimeStore.isNotifiedToday()) return
+        // Once a day — the overlay already covers every bump, so repeating the
+        // notification (and its sound) on each Reels visit is just noise
+        if (screenTimeStore.isNotifiedToday()) return
         val totalMs = screenTimeStore.getTodayTotal()
         val limitMs = screenTimeStore.getDailyLimit() * 60_000L
         if (totalMs >= limitMs) {
