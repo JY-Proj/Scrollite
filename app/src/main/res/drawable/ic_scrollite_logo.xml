@@ -1,0 +1,14 @@
+<!-- Brand mark: Gray Cyan tile with the four palette bars. Fixed brand colors, same in both modes. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="28dp"
+    android:height="28dp"
+    android:viewportWidth="28"
+    android:viewportHeight="28">
+    <path
+        android:fillColor="@color/brand_gray_cyan"
+        android:pathData="M8,0H20A8,8 0,0 1,28 8V20A8,8 0,0 1,20 28H8A8,8 0,0 1,0 20V8A8,8 0,0 1,8 0Z" />
+    <path android:fillColor="@color/brand_green" android:pathData="M4.5,13h2.5v9h-2.5z" />
+    <path android:fillColor="@color/brand_yellow" android:pathData="M10,8h2.5v14h-2.5z" />
+    <path android:fillColor="@color/brand_green" android:pathData="M15.5,11h2.5v11h-2.5z" />
+    <path android:fillColor="@color/brand_teal" android:pathData="M21,6h2.5v16h-2.5z" />
+</vector>

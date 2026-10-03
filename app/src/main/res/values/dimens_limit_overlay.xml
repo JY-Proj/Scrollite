@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- How opaque the overlay is over the Reel (1.0 = fully hidden) -->
+    <item name="limit_overlay_scrim_alpha" format="float" type="dimen">0.85</item>
+    <!-- Blur of the Reel behind the overlay; Android 12+ on devices that support it -->
+    <dimen name="limit_overlay_blur_radius">12dp</dimen>
+    <!-- Faint accent tint inside the usage card -->
+    <item name="limit_overlay_card_fill_alpha" format="float" type="dimen">0.05</item>
+    <!-- Disabled buttons and locked extension options -->
+    <item name="limit_overlay_disabled_alpha" format="float" type="dimen">0.4</item>
+
+    <dimen name="limit_overlay_stroke_hairline">1dp</dimen>
+    <dimen name="limit_overlay_stroke_outline">1.5dp</dimen>
+    <dimen name="limit_overlay_corner_card">20dp</dimen>
+    <dimen name="limit_overlay_corner_button">28dp</dimen>
+    <dimen name="limit_overlay_corner_tag">14dp</dimen>
+    <dimen name="limit_overlay_corner_progress">4dp</dimen>
+    <dimen name="limit_overlay_icon_ring_size">96dp</dimen>
+    <dimen name="limit_overlay_progress_height">8dp</dimen>
+</resources>

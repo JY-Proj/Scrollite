@@ -5,6 +5,8 @@ package com.jynx.scrollite.ui.limit
  * Kept free of Android types so the decision logic is unit-testable.
  */
 data class LimitOverlaySpec(
+    /** The app's own name for what the user is being moved out of, e.g. "Reels". */
+    val shortFormLabel: String,
     val variant: Variant,
     val watchedMinutes: Long,
     val limitMinutes: Long,
@@ -36,6 +38,7 @@ data class LimitOverlaySpec(
          *   limit + extra when this Reels session began
          */
         fun forBump(
+            shortFormLabel: String,
             watchedMs: Long,
             limitMs: Long,
             extraMs: Long,
@@ -50,6 +53,7 @@ data class LimitOverlaySpec(
             }
             val remaining = ExtensionPolicy.remaining(extensionsUsedToday, maxExtensionsPerDay)
             return LimitOverlaySpec(
+                shortFormLabel = shortFormLabel,
                 variant = variant,
                 watchedMinutes = watchedMs / 60_000L,
                 limitMinutes = limitMs / 60_000L,

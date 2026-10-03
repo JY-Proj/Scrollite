@@ -4,13 +4,21 @@
 
     <!-- Limit overlay shown before ejecting the user from Reels -->
     <string name="limit_overlay_title_reached">Time\'s up for today</string>
-    <string name="limit_overlay_body_reached">You\'ve watched %1$d min of Reels today.\nYour limit is %2$d min.</string>
+    <string name="limit_overlay_body_reached">Nice work noticing. The rest of your day is yours.</string>
     <string name="limit_overlay_title_still_over">Still over your limit</string>
-    <string name="limit_overlay_body_still_over">You\'ve already hit today\'s %1$d min Reels limit.</string>
-    <string name="limit_overlay_button_countdown">Leave Reels (%1$d)</string>
+    <string name="limit_overlay_body_still_over">You\'ve already hit today\'s short-video limit.</string>
+    <!-- %1$s is the app's name for its short videos, e.g. Reels -->
+    <string name="limit_overlay_button_countdown">Leave %1$s (%2$d)</string>
+    <string name="limit_overlay_leave">Leave %1$s</string>
     <string name="limit_overlay_button_leaving">Leaving…</string>
     <string name="limit_overlay_title_extra_up">Extra time\'s up</string>
-    <string name="limit_overlay_body_extra_up">That was your %1$d extra min for today.\nYou\'ve watched %2$d min of Reels.</string>
+    <string name="limit_overlay_body_extra_up">That was your %1$d extra min for today.</string>
+    <string name="limit_overlay_card_label">Short videos today</string>
+    <string name="limit_overlay_card_value">%1$d min</string>
+    <string name="limit_overlay_card_limit">Limit %1$d min</string>
+    <!-- Daily limit plus extra time granted today -->
+    <string name="limit_overlay_card_limit_with_extra">Limit %1$d + %2$d min</string>
+    <string name="limit_overlay_resets">Resets at midnight</string>
 
     <!-- "Need more time?" extension flow on the limit overlay -->
     <string name="limit_overlay_extend_link">Need more time?</string>
@@ -22,5 +30,4 @@
     <string name="limit_overlay_extend_wait">Extra time available in %1$d s</string>
     <string name="limit_overlay_extend_ready">Only if you really need it:</string>
     <string name="limit_overlay_extend_option">+%1$d min</string>
-    <string name="limit_overlay_extend_cancel">Leave Reels</string>
 </resources>

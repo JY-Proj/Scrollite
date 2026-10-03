@@ -1,0 +1,13 @@
+<!-- Face for the loosening confirmation (sad); tinted by the caller -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M21,12a9,9 0,1 1,-18 0a9,9 0,1 1,18 0zM9,9.5v1.2M15,9.5v1.2M8.5,17q3.5,-3.2 7,0M7.3,8.4L9.7,7.4M16.7,8.4L14.3,7.4"
+        android:strokeWidth="1.6"
+        android:strokeColor="@android:color/white"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

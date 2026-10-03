@@ -2,6 +2,8 @@ package com.jynx.scrollite.ui.limit
 
 import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
+import android.content.Context
+import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -13,9 +15,11 @@ import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.view.ViewCompat
 import com.jynx.scrollite.R
+import com.jynx.scrollite.data.ThemeMode
 
 /**
  * Full-screen "time's up" screen drawn over the watched app before we eject
@@ -51,6 +55,9 @@ class LimitOverlay(private val service: AccessibilityService) {
         val mainGroup: View = root.findViewById(R.id.limit_main_group)
         val title: TextView = root.findViewById(R.id.limit_title)
         val body: TextView = root.findViewById(R.id.limit_body)
+        val cardValue: TextView = root.findViewById(R.id.limit_card_value)
+        val cardLimit: TextView = root.findViewById(R.id.limit_card_limit)
+        val cardProgress: ProgressBar = root.findViewById(R.id.limit_card_progress)
         val leaveButton: TextView = root.findViewById(R.id.limit_button)
         val extendLink: TextView = root.findViewById(R.id.limit_extend_link)
         val extendGroup: View = root.findViewById(R.id.limit_extend_group)
@@ -69,35 +76,38 @@ class LimitOverlay(private val service: AccessibilityService) {
      * until [dismiss], so the caller can eject or save the extension behind it.
      */
     @SuppressLint("InflateParams") // A window root has no parent; WindowManager supplies the layout params
-    fun show(spec: LimitOverlaySpec, onLeave: () -> Unit, onExtend: (minutes: Int) -> Unit) {
+    fun show(
+        spec: LimitOverlaySpec,
+        themeMode: ThemeMode,
+        onLeave: () -> Unit,
+        onExtend: (minutes: Int) -> Unit,
+    ) {
         if (isShowing) return
 
-        val root = LayoutInflater.from(service).inflate(R.layout.overlay_limit, null)
+        val root = LayoutInflater.from(themedContext(themeMode)).inflate(R.layout.overlay_limit, null)
         val v = Views(root)
 
         when (spec.variant) {
             LimitOverlaySpec.Variant.LIMIT_REACHED -> {
                 v.title.setText(R.string.limit_overlay_title_reached)
-                v.body.text = service.getString(
-                    R.string.limit_overlay_body_reached, spec.watchedMinutes, spec.limitMinutes
-                )
+                v.body.setText(R.string.limit_overlay_body_reached)
             }
             LimitOverlaySpec.Variant.EXTRA_TIME_UP -> {
                 v.title.setText(R.string.limit_overlay_title_extra_up)
-                v.body.text = service.getString(
-                    R.string.limit_overlay_body_extra_up, spec.extraMinutes, spec.watchedMinutes
-                )
+                v.body.text = service.getString(R.string.limit_overlay_body_extra_up, spec.extraMinutes)
             }
             LimitOverlaySpec.Variant.STILL_OVER_LIMIT -> {
                 v.title.setText(R.string.limit_overlay_title_still_over)
-                v.body.text = service.getString(R.string.limit_overlay_body_still_over, spec.limitMinutes)
+                v.body.setText(R.string.limit_overlay_body_still_over)
             }
         }
+        bindUsageCard(v, spec)
         // Announced by TalkBack when the overlay appears
         ViewCompat.setAccessibilityPaneTitle(root, v.title.text)
 
         this.onLeave = onLeave
         this.onExtend = onExtend
+        v.extendCancel.text = service.getString(R.string.limit_overlay_leave, spec.shortFormLabel)
         v.leaveButton.setOnClickListener { leave() }
         v.extendCancel.setOnClickListener { leave() }
         if (spec.canExtend) {
@@ -129,9 +139,39 @@ class LimitOverlay(private val service: AccessibilityService) {
 
         requestAudioFocus()
         runTicker(spec.countdownSeconds,
-            onTick = { v.leaveButton.text = service.getString(R.string.limit_overlay_button_countdown, it) },
+            onTick = { v.leaveButton.text = service.getString(R.string.limit_overlay_button_countdown, spec.shortFormLabel, it) },
             onFinish = { leave() },
         )
+    }
+
+    /**
+     * The service's own context follows the phone's light/dark setting; when
+     * the user picked one in Scrollite, override it so the overlay's
+     * values / values-night colors match the app.
+     */
+    private fun themedContext(mode: ThemeMode): Context {
+        val nightBits = when (mode) {
+            ThemeMode.SYSTEM -> return service
+            ThemeMode.LIGHT -> Configuration.UI_MODE_NIGHT_NO
+            ThemeMode.DARK -> Configuration.UI_MODE_NIGHT_YES
+        }
+        val config = Configuration(service.resources.configuration).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or nightBits
+        }
+        return service.createConfigurationContext(config)
+    }
+
+    private fun bindUsageCard(v: Views, spec: LimitOverlaySpec) {
+        v.cardValue.text = service.getString(R.string.limit_overlay_card_value, spec.watchedMinutes)
+        v.cardLimit.text =
+            if (spec.extraMinutes > 0) {
+                service.getString(R.string.limit_overlay_card_limit_with_extra, spec.limitMinutes, spec.extraMinutes)
+            } else {
+                service.getString(R.string.limit_overlay_card_limit, spec.limitMinutes)
+            }
+        val allowedMinutes = (spec.limitMinutes + spec.extraMinutes).coerceAtLeast(1)
+        v.cardProgress.max = allowedMinutes.toInt()
+        v.cardProgress.progress = spec.watchedMinutes.coerceAtMost(allowedMinutes).toInt()
     }
 
     /** Fades the overlay out and cancels a countdown still in progress. */
@@ -274,6 +314,11 @@ class LimitOverlay(private val service: AccessibilityService) {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             fitInsetsTypes = 0
+        }
+        // Frosted look over the Reel; without blur support the translucent scrim alone still works
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && windowManager.isCrossWindowBlurEnabled) {
+            flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+            blurBehindRadius = service.resources.getDimensionPixelSize(R.dimen.limit_overlay_blur_radius)
         }
     }
 }

@@ -1,13 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="purple_200">#FFBB86FC</color>
-    <color name="purple_500">#FF6200EE</color>
-    <color name="purple_700">#FF3700B3</color>
-    <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
-    <color name="limit_overlay_scrim">#E6000000</color>
-    <color name="limit_overlay_body">#CCFFFFFF</color>
-    <color name="limit_overlay_button_disabled">#99FFFFFF</color>
+    <!--
+        Brand palette: the only place raw brand hex values live. Everything else
+        refers to the role colors below (overridden for dark mode in
+        values-night/colors.xml) or, in Compose, to ui/theme/Color.kt, which
+        reads this palette rather than repeating it.
+    -->
+    <color name="brand_gray_cyan">#FF327F76</color>
+    <color name="brand_teal">#FFD3FFF9</color>
+    <color name="brand_green">#FFBAF1B9</color>
+    <color name="brand_yellow">#FFF4F4A6</color>
+    <!-- Turquoise family between Teal and the logo's Gray Cyan: the main UI accent -->
+    <color name="brand_turquoise">#FF177E89</color>
+    <!-- Chart teal from the Figma design system (line/bar graphs) -->
+    <color name="brand_chart_teal">#FF51CDBC</color>
+
+    <!-- Neutrals for text, lines and backgrounds, tinted slightly toward the teal -->
+    <color name="neutral_ink">#FF101413</color>
+    <color name="neutral_white">#FFFFFFFF</color>
+    <color name="neutral_gray_50">#FFEEF2F1</color>
+    <color name="neutral_gray_100">#FFE3E8E7</color>
+    <color name="neutral_gray_200">#FFC9D1CE</color>
+    <color name="neutral_gray_300">#FFA7B3B0</color>
+    <color name="neutral_gray_600">#FF55605D</color>
+    <color name="neutral_gray_700">#FF3D4744</color>
+    <color name="neutral_gray_800">#FF3A4240</color>
+    <color name="neutral_gray_900">#FF26302E</color>
+
+    <!-- Window background behind the Compose UI, so launch doesn't flash the wrong color -->
+    <color name="app_background">@color/neutral_gray_50</color>
+
+    <!-- Limit overlay roles, light mode. Alphas live in dimens_limit_overlay.xml. -->
+    <color name="limit_overlay_scrim_base">@color/neutral_gray_50</color>
+    <color name="limit_overlay_title">@color/neutral_ink</color>
+    <color name="limit_overlay_text_primary">@color/neutral_ink</color>
+    <color name="limit_overlay_text_secondary">@color/neutral_gray_700</color>
+    <!-- Icon, icon ring, card outline and progress fill -->
+    <color name="limit_overlay_accent">@color/brand_turquoise</color>
+    <color name="limit_overlay_progress_track">@color/neutral_gray_100</color>
+    <color name="limit_overlay_button_fill_base">@color/brand_teal</color>
+    <color name="limit_overlay_button_stroke_base">@color/brand_turquoise</color>
+    <color name="limit_overlay_button_text_base">@color/neutral_ink</color>
+    <color name="limit_overlay_link_base">@color/neutral_ink</color>
+    <color name="limit_overlay_tag_stroke">@color/brand_turquoise</color>
+    <color name="limit_overlay_tag_text">@color/neutral_gray_700</color>
 </resources>
