@@ -4,6 +4,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.jynx.scrollite.data.Platform
 import com.jynx.scrollite.data.Section
 import com.jynx.scrollite.tracking.apps.InstagramDetector
+import com.jynx.scrollite.tracking.apps.YouTubeDetector
 
 /**
  * Everything app-specific about tracking one app: how to recognize it and
@@ -30,7 +31,7 @@ data class ShortVideoInfo(val author: String, val caption: String?)
 
 /** Registry of supported apps. */
 object AppDetectors {
-    val all: List<AppDetector> = listOf(InstagramDetector)
+    val all: List<AppDetector> = listOf(InstagramDetector, YouTubeDetector)
 
     private val byPackage = all.associateBy { it.packageName }
 

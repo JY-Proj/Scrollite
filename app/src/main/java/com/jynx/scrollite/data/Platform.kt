@@ -21,6 +21,12 @@ enum class Platform(
             Section.SHORT_VIDEO to "For You",
             Section.MESSAGES to "Inbox",
         ),
+    ),
+    YOUTUBE(
+        displayName = "YouTube",
+        sectionLabels = mapOf(
+            Section.SHORT_VIDEO to "Shorts",
+        ),
     );
 
     /** This app's own name for [section], e.g. Reels for Instagram's short videos. */
