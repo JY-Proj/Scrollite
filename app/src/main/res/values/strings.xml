@@ -1,4 +1,26 @@
 <resources>
     <string name="app_name">Scrollite</string>
     <string name="accessibility_service_description">Scrollite monitors app usage to help you stay aware of your screen time habits.</string>
+
+    <!-- Limit overlay shown before ejecting the user from Reels -->
+    <string name="limit_overlay_title_reached">Time\'s up for today</string>
+    <string name="limit_overlay_body_reached">You\'ve watched %1$d min of Reels today.\nYour limit is %2$d min.</string>
+    <string name="limit_overlay_title_still_over">Still over your limit</string>
+    <string name="limit_overlay_body_still_over">You\'ve already hit today\'s %1$d min Reels limit.</string>
+    <string name="limit_overlay_button_countdown">Leave Reels (%1$d)</string>
+    <string name="limit_overlay_button_leaving">Leaving…</string>
+    <string name="limit_overlay_title_extra_up">Extra time\'s up</string>
+    <string name="limit_overlay_body_extra_up">That was your %1$d extra min for today.\nYou\'ve watched %2$d min of Reels.</string>
+
+    <!-- "Need more time?" extension flow on the limit overlay -->
+    <string name="limit_overlay_extend_link">Need more time?</string>
+    <string name="limit_overlay_extend_title">Take a breath first</string>
+    <plurals name="limit_overlay_extend_body">
+        <item quantity="one">You have 1 extension left today. Is this worth it?</item>
+        <item quantity="other">You have %1$d extensions left today. Is this worth it?</item>
+    </plurals>
+    <string name="limit_overlay_extend_wait">Extra time available in %1$d s</string>
+    <string name="limit_overlay_extend_ready">Only if you really need it:</string>
+    <string name="limit_overlay_extend_option">+%1$d min</string>
+    <string name="limit_overlay_extend_cancel">Leave Reels</string>
 </resources>
