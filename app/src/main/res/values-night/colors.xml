@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="app_background">@color/neutral_ink</color>
+
+    <!-- Limit overlay roles, dark mode. Brand palette is in values/colors.xml. -->
+    <color name="limit_overlay_scrim_base">@color/neutral_ink</color>
+    <color name="limit_overlay_title">@color/brand_teal</color>
+    <color name="limit_overlay_text_primary">@color/neutral_white</color>
+    <color name="limit_overlay_text_secondary">@color/neutral_gray_300</color>
+    <color name="limit_overlay_accent">@color/brand_teal</color>
+    <color name="limit_overlay_progress_track">@color/neutral_gray_900</color>
+    <color name="limit_overlay_button_fill_base">@color/brand_teal</color>
+    <color name="limit_overlay_button_stroke_base">@color/brand_teal</color>
+    <color name="limit_overlay_button_text_base">@color/neutral_ink</color>
+    <color name="limit_overlay_link_base">@color/neutral_white</color>
+    <color name="limit_overlay_tag_stroke">@color/brand_yellow</color>
+    <color name="limit_overlay_tag_text">@color/brand_yellow</color>
+</resources>

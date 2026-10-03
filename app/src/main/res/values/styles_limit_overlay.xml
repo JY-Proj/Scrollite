@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Colors come from the limit_overlay_* roles in values/ and values-night/colors.xml -->
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base for the dot-named styles below -->
     <style name="LimitOverlay" />
@@ -9,29 +10,29 @@
         <!-- API 28+; older versions just skip the heading hint -->
         <item name="android:accessibilityHeading" tools:targetApi="p">true</item>
         <item name="android:gravity">center</item>
-        <item name="android:textColor">@color/white</item>
-        <item name="android:textSize">26sp</item>
+        <item name="android:textColor">@color/limit_overlay_title</item>
+        <item name="android:textSize">28sp</item>
         <item name="android:textStyle">bold</item>
     </style>
 
     <style name="LimitOverlay.Body">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">12dp</item>
+        <item name="android:layout_marginTop">10dp</item>
         <item name="android:gravity">center</item>
         <item name="android:lineSpacingMultiplier">1.2</item>
-        <item name="android:textColor">@color/limit_overlay_body</item>
-        <item name="android:textSize">17sp</item>
+        <item name="android:textColor">@color/limit_overlay_text_secondary</item>
+        <item name="android:textSize">16sp</item>
     </style>
 
     <style name="LimitOverlay.Button">
         <item name="android:layout_height">wrap_content</item>
         <item name="android:background">@drawable/bg_limit_button</item>
         <item name="android:gravity">center</item>
-        <item name="android:minHeight">52dp</item>
+        <item name="android:minHeight">56dp</item>
         <item name="android:paddingStart">24dp</item>
         <item name="android:paddingEnd">24dp</item>
-        <item name="android:textColor">@color/black</item>
+        <item name="android:textColor">@color/limit_overlay_button_text</item>
         <item name="android:textSize">17sp</item>
         <item name="android:textStyle">bold</item>
     </style>
@@ -40,11 +41,54 @@
     <style name="LimitOverlay.Link">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">16dp</item>
+        <item name="android:layout_marginTop">8dp</item>
         <item name="android:gravity">center</item>
         <item name="android:minHeight">48dp</item>
         <item name="android:padding">12dp</item>
-        <item name="android:textColor">@color/limit_overlay_link_text</item>
+        <item name="android:textColor">@color/limit_overlay_link</item>
         <item name="android:textSize">15sp</item>
+    </style>
+
+    <style name="LimitOverlay.Card">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">28dp</item>
+        <item name="android:background">@drawable/bg_limit_card</item>
+        <item name="android:orientation">vertical</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingEnd">20dp</item>
+        <item name="android:paddingTop">18dp</item>
+        <item name="android:paddingBottom">18dp</item>
+    </style>
+
+    <style name="LimitOverlay.CardLabel">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textColor">@color/limit_overlay_text_secondary</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+
+    <style name="LimitOverlay.CardValue">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">4dp</item>
+        <item name="android:textColor">@color/limit_overlay_text_primary</item>
+        <item name="android:textSize">28sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="LimitOverlay.Tag">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">12dp</item>
+        <item name="android:background">@drawable/bg_limit_tag</item>
+        <item name="android:drawablePadding">6dp</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:paddingBottom">6dp</item>
+        <item name="android:textColor">@color/limit_overlay_tag_text</item>
+        <item name="android:textSize">13sp</item>
     </style>
 </resources>

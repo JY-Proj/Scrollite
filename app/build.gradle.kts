@@ -33,7 +33,14 @@ android {
     }
     buildFeatures {
         compose = true
+        // BuildConfig.DEBUG gates the debug-only test controls
+        buildConfig = true
     }
+}
+
+// Exported Room schemas are committed so database migrations can be reviewed and tested
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {

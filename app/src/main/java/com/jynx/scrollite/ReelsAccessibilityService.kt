@@ -6,32 +6,49 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.graphics.Bitmap
 import android.os.Build
 import android.view.Display
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 
 import com.jynx.scrollite.data.AppDatabase
+import com.jynx.scrollite.data.AppearanceStore
 import com.jynx.scrollite.data.Platform
 import com.jynx.scrollite.data.ReelEntry
 import com.jynx.scrollite.data.ReelsRepository
 import com.jynx.scrollite.data.RoomReelsRepository
 import com.jynx.scrollite.data.ScreenTimeStore
+import com.jynx.scrollite.data.Section
+import com.jynx.scrollite.data.ThemeMode
+import com.jynx.scrollite.data.UsageRepository
+import com.jynx.scrollite.data.UsageSession
+import com.jynx.scrollite.tracking.AppDetector
+import com.jynx.scrollite.tracking.AppDetectors
+import com.jynx.scrollite.tracking.Moment
+import com.jynx.scrollite.tracking.SessionTracker
 import com.jynx.scrollite.ui.limit.LimitOverlay
 import com.jynx.scrollite.ui.limit.LimitOverlaySpec
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.time.Instant
+import java.time.ZoneId
 
 // for later
 import android.accessibilityservice.AccessibilityService.ScreenshotResult
@@ -42,24 +59,11 @@ class ReelsAccessibilityService : AccessibilityService() {
 
     companion object {
 
-        // TEMP: UI exploration, remove before production
         private const val TAG = "ReelsService"
-        private const val INSTAGRAM_PKG = "com.instagram.android"
-        private const val DUMP_INTERVAL_MS = 3000L
 
-        // Signals discovered via Layout Inspector / the temp dump function
-        private const val ID_CLIPS_PAGER = "com.instagram.android:id/clips_viewer_view_pager"
-        private const val ID_AUTHOR_USERNAME = "com.instagram.android:id/clips_author_username"
-        private const val ID_TAB_CLIPS = "com.instagram.android:id/clips_tab"
+        // App-specific signals (package names, view IDs) live in each app's AppDetector
 
-        // button group
-        private const val ID_LIKE_BUTTON = "com.instagram.android:id/like_button"
-        private const val ID_COMMENT_BUTTON = "com.instagram.android:id/comment_button"
-        private const val ID_DIRECT_SHARE_BUTTON = "com.instagram.android:id/direct_share_button"
-        private const val ID_CLIPS_UFI_MORE_BUTTON_COMPONENT = "com.instagram.android:id/clips_ufi_more_button_component"
-
-        // caption extraction
-        private const val ID_CAPTION_COMPONENT = "com.instagram.android:id/clips_caption_component"
+        // short-video extraction
         private const val DEBOUNCE_MS = 400L
 
         //notification limits
@@ -70,10 +74,10 @@ class ReelsAccessibilityService : AccessibilityService() {
         private const val ID_FEED_TAB = "com.instagram.android:id/feed_tab"
         private const val LAUNCH_REDIRECT_DELAY_MS = 500L // give the UI time to render before clicking
 
-        // isReelsScreen() flickers false for single frames during normal scrolling
+        // Section detection flickers for single frames during normal scrolling
         // (23 false readings observed within 86ms in one real session) — only treat
-        // it as "actually left Reels" if it stays false for this long.
-        private const val SESSION_STOP_DEBOUNCE_MS = 500L
+        // a section change as real if the new reading holds for this long.
+        private const val SECTION_SWITCH_DEBOUNCE_MS = 500L
 
         // Eject verification/retry
         private const val EJECT_VERIFY_DELAY_MS = 300L
@@ -83,51 +87,59 @@ class ReelsAccessibilityService : AccessibilityService() {
     // Debounce
     private val debounceHandler = Handler(Looper.getMainLooper())
     private var debounceRunnable: Runnable? = null
-    private var pendingStopRunnable: Runnable? = null
-
-    // TEMP: UI exploration, remove before production
-    private var lastDumpMs = 0L
+    private var pendingSwitchRunnable: Runnable? = null
+    private var pendingSwitchTarget: Pair<Platform, Section>? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val repository: ReelsRepository by lazy {
         RoomReelsRepository(AppDatabase.getInstance(applicationContext).reelDao(), applicationContext)
     }
 
-    // Interim de-dup heuristic: insert only when the username changes from the
+    // Interim de-dup heuristic: insert only when the author changes from the
     // last inserted one. Not real debounce (won't handle scrolling back to a
     // previous Reel, rapid re-scrolls, etc.) — a placeholder until a proper
     // "confirmed new Reel" trigger exists.
     private var lastInsertedUsername: String? = null
 
-    //keep track of whether it is in reels session
-    private var isReelsSession = false
-    private var sessionStartElapsed = 0L
+    // The app + section currently being timed; each continuous stretch becomes a usage session
+    private val sessionTracker = SessionTracker()
+    private val usageRepository: UsageRepository by lazy {
+        UsageRepository(AppDatabase.getInstance(applicationContext).usageSessionDao())
+    }
+
+    // Serializes session writes and limit-state reads (see launchInOrder)
+    private val dbMutex = Mutex()
+
     private var lastForegroundPackage: String? = null
 
-
+    // "Session" in the limit fields below means the current short-video stretch
     private var todayTotalAtSessionStart = 0L
     private var cachedDailyLimitMs = Long.MAX_VALUE // safe default until loaded
     private var cachedExtensionMs = 0L
     private var cachedExtensionsUsed = 0
     private var cachedMaxExtensions = 0
+    private var cachedThemeMode = ThemeMode.DEFAULT
     private var hasBumpedThisSession = false
     private var limitStateLoadJob: Job? = null
 
     private val limitOverlay by lazy { LimitOverlay(this) }
+
+    /** The app the limit overlay is shown over; leaving it for another app dismisses the overlay. */
+    private var overlayAppPackage: String? = null
 
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         Log.d(TAG, "eventType=${AccessibilityEvent.eventTypeToString(event.eventType)} pkg=${event.packageName}")
 
         // Our own overlay window fires events too. Without this, showing it would
-        // look like the user left Instagram (the non-Instagram branch below).
+        // look like the user left the tracked app (the untracked-app branch below).
         if (event.packageName == packageName) return
 
         // Timing is already committed and the eject is owned by the overlay flow,
         // so ignore everything except the user leaving for another app — then
         // there's nothing left to eject from, so just take the overlay down.
         if (limitOverlay.isShowing) {
-            if (event.packageName != INSTAGRAM_PKG &&
+            if (event.packageName?.toString() != overlayAppPackage &&
                 event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             ) {
                 limitOverlay.dismiss()
@@ -144,42 +156,45 @@ class ReelsAccessibilityService : AccessibilityService() {
 //            Log.d(TAG, "Instagram just came to foreground — will force-redirect to Feed")
 //            forceRedirectToFeed()
 //        }
-        if (event.packageName != INSTAGRAM_PKG) {
-            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED){
-                pendingStopRunnable?.let { debounceHandler.removeCallbacks(it) }
-                pendingStopRunnable = null
-                stopReelsTiming()
+        val detector = AppDetectors.forPackage(event.packageName)
+        if (detector == null) {
+            // Checking the active window (not just the event's package) keeps e.g. the
+            // keyboard popping up in a tracked app's DMs from counting as leaving it
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && foregroundDetector() == null) {
+                stopTracking()
             }
-            return // TODO: add more later as we are not only limited to Instagram
+            return
         }
         val root = rootInActiveWindow ?: return
+        // Apps keep sending events behind e.g. the notification shade — don't time those
+        if (root.packageName != detector.packageName) {
+            root.recycle()
+            return
+        }
 
-        // Detection runs first — dumpNodeTree recycles root, so it must go last
-        val (isReels, matchCount, totalSignals) = isReelsScreen(root)
-        Log.d(TAG, "isReels=$isReels matchCount=$matchCount totalSignals=$totalSignals")
-        updateReelsTiming(isReels)
+        val section = detector.detectSection(root)
+        Log.d(TAG, "${detector.platform} section=$section")
+        onSectionDetected(detector.platform, section)
 
-        if (isReels) {
-            val username = extractUsername(root)
-            Log.d(TAG, "REELS DETECTED username=$username") // TEMP: verify username extraction, remove before production
-
-            if (username != null && username != lastInsertedUsername) {
-                lastInsertedUsername = username
-                scheduleExtraction()
+        if (section.isShortForm) {
+            val author = detector.extractShortVideo(root)?.author
+            if (author != null && author != lastInsertedUsername) {
+                lastInsertedUsername = author
+                scheduleExtraction(detector)
             }
         }  else {
             debounceRunnable?.let { debounceHandler.removeCallbacks(it) }
         }
 
-        // TEMP: UI exploration, remove before production
-        val now = System.currentTimeMillis()
-        if (now - lastDumpMs >= DUMP_INTERVAL_MS) {
-            lastDumpMs = now
-            dumpNodeTree(root, depth = 0) // recycles root
-        } else {
-            root.recycle()
-        }
+        root.recycle()
+    }
 
+    /** The detector for the app whose window is actually in front, if it's a tracked app. */
+    private fun foregroundDetector(): AppDetector? {
+        val root = rootInActiveWindow ?: return null
+        val detector = AppDetectors.forPackage(root.packageName)
+        root.recycle()
+        return detector
     }
 
 //    private fun forceRedirectToFeed() {
@@ -199,10 +214,43 @@ class ReelsAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         val channel = NotificationChannel(
             LIMIT_CHANNEL_ID,
-            "Reels time limit",
+            "Short video time limit",
             NotificationManager.IMPORTANCE_DEFAULT
         )
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+
+        // No window change fires when the screen turns off mid-Reel, so without this
+        // the open session would keep counting until the next event — possibly hours later
+        ContextCompat.registerReceiver(
+            this, screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
+        migrateLegacyTodayTotal()
+    }
+
+    private val screenOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.d(TAG, "Screen off — ending the open session")
+            stopTracking()
+        }
+    }
+
+    /**
+     * Today's watch time used to be a single number in ScreenTimeStore (it was
+     * only ever Instagram Reels). Carry it over as one session ending now so today's limit doesn't reset on
+     * upgrade (its exact times are unknown; only the total matters).
+     */
+    private fun migrateLegacyTodayTotal() {
+        launchInOrder {
+            val legacyMs = screenTimeStore.takeLegacyTodayTotal()
+            if (legacyMs > 0) {
+                val now = System.currentTimeMillis()
+                usageRepository.record(
+                    UsageSession(startMs = now - legacyMs, endMs = now, platform = Platform.INSTAGRAM, section = Section.SHORT_VIDEO)
+                )
+                Log.d(TAG, "Migrated ${legacyMs / 1000}s of today's watch time into usage sessions")
+            }
+        }
     }
 
     /**
@@ -210,29 +258,27 @@ class ReelsAccessibilityService : AccessibilityService() {
      * extraction once no new events have come in for DEBOUNCE_MS — i.e. once
      * the screen has "settled" instead of still mid-transition.
      */
-    private fun scheduleExtraction() {
+    private fun scheduleExtraction(detector: AppDetector) {
         debounceRunnable?.let { debounceHandler.removeCallbacks(it) }
         val runnable = Runnable {
             val freshRoot = rootInActiveWindow ?: return@Runnable
 
-            // Re-check everything against the settled screen — the username
+            // Re-check everything against the settled screen — the author
             // that triggered this might have already changed if the user
             // kept scrolling during the 400ms debounce window.
-            val (stillReels, _, _) = isReelsScreen(freshRoot)
-            if (!stillReels) { freshRoot.recycle(); return@Runnable }
+            if (freshRoot.packageName != detector.packageName || !detector.detectSection(freshRoot).isShortForm) {
+                freshRoot.recycle()
+                return@Runnable
+            }
 
-            val username = extractUsername(freshRoot)
-            val caption = extractCaption(freshRoot)
-            val hashtags = extractHashtags(caption)
-            Log.d(TAG, "extracted username=$username caption=$caption hashtags=$hashtags")
-
-            if (username != null) {
+            val video = detector.extractShortVideo(freshRoot)
+            if (video != null) {
                 val entry = ReelEntry(
-                    username = username,
-                    caption = caption,
-                    hashtags = hashtags,
+                    username = video.author,
+                    caption = video.caption,
+                    hashtags = extractHashtags(video.caption),
                     screenshotPath = null, // filled in after screenshot resolves
-                    platform = Platform.INSTAGRAM,
+                    platform = detector.platform,
                     timestamp = System.currentTimeMillis(),
                 )
                 serviceScope.launch {
@@ -283,100 +329,9 @@ class ReelsAccessibilityService : AccessibilityService() {
         )
     }
 
-    /**
-     * Finds the caption text inside clips_caption_component. Per the dump,
-     * the container itself has no visible text — the actual string shows up
-     * as a contentDescription on a node nested inside it.
-     */
-    private fun extractCaption(root: AccessibilityNodeInfo): String? {
-        val containers = root.findAccessibilityNodeInfosByViewId(ID_CAPTION_COMPONENT)
-            .filter { it.isVisibleToUser }
-        if (containers.isEmpty()) return null
-
-        return containers.firstNotNullOfOrNull { findFirstContentDescription(it) }
-    }
-
-    private fun findFirstContentDescription(node: AccessibilityNodeInfo): String? {
-        node.contentDescription?.toString()?.let { if (it.isNotBlank()) return it }
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            findFirstContentDescription(child)?.let { return it }
-        }
-        return null
-    }
-
     private fun extractHashtags(caption: String?): List<String> {
         if (caption.isNullOrBlank()) return emptyList()
         return Regex("#\\w+").findAll(caption).map { it.value }.toList()
-    }
-
-    /**
-     * Checks the current screen for known Reels signals and returns
-     * true if enough of them match (so one Instagram update breaking
-     * one signal doesn't break detection entirely).
-     */
-    private fun isReelsScreen(root: AccessibilityNodeInfo): Triple<Boolean, Int, Int> {
-        val signals = listOf(
-            hasViewId(root, ID_CLIPS_PAGER),
-            hasViewId(root, ID_AUTHOR_USERNAME),
-            hasViewId(root, ID_LIKE_BUTTON) &&
-            hasViewId(root, ID_COMMENT_BUTTON) &&
-            hasViewId(root, ID_DIRECT_SHARE_BUTTON) &&
-            hasViewId(root, ID_CLIPS_UFI_MORE_BUTTON_COMPONENT),
-            isTabSelected(root, ID_TAB_CLIPS),
-            // add more checks here as we nail down more signals,
-            // e.g. hasContentDescription(root, "Like"), hasContentDescription(root, "Share reel")
-        )
-
-        val matchCount = signals.count { it }
-        val threshold = 2 // start low with few signals; raise as we add more
-        return Triple(matchCount >= threshold, matchCount, signals.size)
-    }
-
-    /**
-     * Searches the entire UI tree for an element with a specific view ID
-     */
-    private fun hasViewId(root: AccessibilityNodeInfo, viewId: String): Boolean {
-        return root.findAccessibilityNodeInfosByViewId(viewId)
-            .any { it.isVisibleToUser }
-    }
-
-    /**
-     * Reads the author username text off the clips_author_username node.
-     * recycle() is a no-op on API 33+ (pool removed) but still matters on
-     * this app's minSdk 26-32 range, so it's called unconditionally.
-     */
-    private fun extractUsername(root: AccessibilityNodeInfo): String? {
-        val nodes = root.findAccessibilityNodeInfosByViewId(ID_AUTHOR_USERNAME)
-        try {
-            return nodes.firstOrNull { it.isVisibleToUser }
-                ?.text?.toString()?.trim()
-                ?.takeIf { it.isNotEmpty() }
-        } finally {
-            nodes.forEach { it.recycle() }
-        }
-    }
-
-    /**
-     * Recursively search for UI elements with specific text content descriptions
-     *
-     * Can be used to find buttons/icons by text description
-     */
-    private fun hasContentDescription(root: AccessibilityNodeInfo, text: String): Boolean {
-        if (root.contentDescription?.contains(text, ignoreCase = true) == true) return true
-        for (i in 0 until root.childCount) {
-            val child = root.getChild(i) ?: continue
-            if (hasContentDescription(child, text)) return true
-        }
-        return false
-    }
-
-    /**
-     * Check if the user is on a certain tab
-     */
-    private fun isTabSelected(root: AccessibilityNodeInfo, tabId: String): Boolean {
-        return root.findAccessibilityNodeInfosByViewId(tabId)
-            .any { it.isSelected }
     }
 
     override fun onInterrupt() {}
@@ -384,30 +339,14 @@ class ReelsAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         // Otherwise a service disabled mid-countdown leaves the overlay stuck on screen
         limitOverlay.removeNow()
-        pendingStopRunnable?.let { debounceHandler.removeCallbacks(it) }
-        pendingStopRunnable = null
-        stopReelsTiming()
+        try {
+            unregisterReceiver(screenOffReceiver)
+        } catch (e: IllegalArgumentException) {
+            // Never registered (service destroyed before onServiceConnected)
+        }
+        stopTracking()
         super.onDestroy()
         serviceScope.cancel()
-    }
-
-    // TEMP: UI exploration, remove before production
-    private fun dumpNodeTree(node: AccessibilityNodeInfo?, depth: Int) {
-        if (node == null) return
-
-        val indent = "  ".repeat(depth)
-        val cls = node.className ?: ""
-        val id = node.viewIdResourceName ?: ""
-        val text = node.text ?: ""
-        val desc = node.contentDescription ?: ""
-
-        Log.d(TAG, "$indent[$depth] cls=$cls id=$id text=$text desc=$desc")
-
-        for (i in 0 until node.childCount) {
-            dumpNodeTree(node.getChild(i), depth + 1)
-        }
-
-        node.recycle()
     }
 
     //Lazy so applicationContext access happens after service creation
@@ -415,31 +354,98 @@ class ReelsAccessibilityService : AccessibilityService() {
         ScreenTimeStore(applicationContext)
     }
 
-    private fun updateReelsTiming(isReels: Boolean) {
-        if (isReels) {
-            // We're on Reels (still, or again after a brief flicker) — cancel any
-            // debounced stop so a single-frame false reading doesn't tear the
-            // session down and reset the limit state mid-watch.
-            pendingStopRunnable?.let { debounceHandler.removeCallbacks(it) }
-            pendingStopRunnable = null
+    private val appearanceStore: AppearanceStore by lazy {
+        AppearanceStore(applicationContext)
+    }
 
-            if (!isReelsSession) {
-                isReelsSession = true
-                sessionStartElapsed = SystemClock.elapsedRealtime()
-                hasBumpedThisSession = false
-                loadSessionLimitState()
-            } else {
-                checkLimitDuringSession()
-            }
-        } else if (isReelsSession && pendingStopRunnable == null) {
-            val runnable = Runnable {
-                pendingStopRunnable = null
-                stopReelsTiming()
-            }
-            pendingStopRunnable = runnable
-            debounceHandler.postDelayed(runnable, SESSION_STOP_DEBOUNCE_MS)
+    /**
+     * Called with the app + section detected on every event from a tracked app.
+     * Starting from nothing, or switching to a different app, is immediate; a
+     * change between sections of the same app is debounced (detection flickers
+     * for single frames while scrolling) but dated from the first reading, so
+     * the debounce delay isn't counted toward the wrong section.
+     */
+    private fun onSectionDetected(platform: Platform, section: Section) {
+        val currentSection = sessionTracker.currentSection
+        if (currentSection == null || sessionTracker.currentPlatform != platform) {
+            cancelPendingSwitch()
+            startSection(platform, section, sessionTracker.now())
+            return
+        }
+        if (section == currentSection) {
+            cancelPendingSwitch() // back on the current section after a flicker
+            splitAtMidnightIfNeeded()
+            if (section.isShortForm) checkLimitDuringSession()
+            return
+        }
+        val target = platform to section
+        if (pendingSwitchTarget == target) return // already waiting to switch here
+
+        cancelPendingSwitch()
+        val firstSeen = sessionTracker.now()
+        val runnable = Runnable {
+            pendingSwitchRunnable = null
+            pendingSwitchTarget = null
+            startSection(platform, section, firstSeen)
+        }
+        pendingSwitchRunnable = runnable
+        pendingSwitchTarget = target
+        debounceHandler.postDelayed(runnable, SECTION_SWITCH_DEBOUNCE_MS)
+    }
+
+    private fun startSection(platform: Platform, section: Section, at: Moment) {
+        sessionTracker.switchTo(platform, section, at)?.let { persist(it) }
+        if (section.isShortForm) {
+            hasBumpedThisSession = false
+            loadSessionLimitState()
         }
     }
+
+    /**
+     * Closes the open session at the first event after midnight and reopens it,
+     * so the new day's limit check starts from the new day's total. (Queries
+     * clip sessions to day bounds, so the closed one is still split correctly.)
+     */
+    private fun splitAtMidnightIfNeeded() {
+        val since = sessionTracker.openSinceWallMs ?: return
+        val startedOn = Instant.ofEpochMilli(since).atZone(ZoneId.systemDefault()).toLocalDate()
+        if (startedOn == usageRepository.today()) return
+
+        sessionTracker.restart()?.let { persist(it) }
+        if (sessionTracker.currentSection?.isShortForm == true) {
+            hasBumpedThisSession = false
+            loadSessionLimitState()
+        }
+    }
+
+    private fun cancelPendingSwitch() {
+        pendingSwitchRunnable?.let { debounceHandler.removeCallbacks(it) }
+        pendingSwitchRunnable = null
+        pendingSwitchTarget = null
+    }
+
+    /** Ends the open session (left Instagram, screen off, bumped, service stopping). */
+    private fun stopTracking() {
+        cancelPendingSwitch()
+        limitStateLoadJob?.cancel()
+        sessionTracker.stop()?.let { persist(it) }
+    }
+
+    private fun persist(session: UsageSession) {
+        launchInOrder {
+            usageRepository.record(session)
+            if (session.section.isShortForm) checkDailyLimit()
+        }
+    }
+
+    /**
+     * Runs database work strictly in call order. Without this, a session write
+     * and the limit reload right after it race, and the reload can miss the
+     * session it should include. UNDISPATCHED takes the (fair, FIFO) lock
+     * synchronously at the call site, so lock order matches call order.
+     */
+    private fun launchInOrder(block: suspend () -> Unit): Job =
+        serviceScope.launch(start = CoroutineStart.UNDISPATCHED) { dbMutex.withLock { block() } }
 
     /**
      * Loads the values checkLimitDuringSession() compares against for this
@@ -449,14 +455,15 @@ class ReelsAccessibilityService : AccessibilityService() {
      */
     private fun loadSessionLimitState() {
         limitStateLoadJob?.cancel()
-        limitStateLoadJob = serviceScope.launch {
-            val total = screenTimeStore.getTodayTotal()
+        limitStateLoadJob = launchInOrder {
+            val total = usageRepository.shortFormTotalOn()
             val limit = screenTimeStore.getDailyLimit() * 60_000L
             val extension = screenTimeStore.getExtensionToday()
             val extensionsUsed = screenTimeStore.getExtensionsUsedToday()
             val maxExtensions = screenTimeStore.getStrictness().maxExtensionsPerDay
             todayTotalAtSessionStart = total
             cachedMaxExtensions = maxExtensions
+            cachedThemeMode = appearanceStore.getThemeMode()
             cachedExtensionMs = extension
             cachedExtensionsUsed = extensionsUsed
             cachedDailyLimitMs = limit // written last — it's what arms checkLimitDuringSession()
@@ -469,8 +476,7 @@ class ReelsAccessibilityService : AccessibilityService() {
 
     private fun checkLimitDuringSession() {
         if (hasBumpedThisSession) return // don't spam performGlobalAction every event
-        val elapsedInSession = SystemClock.elapsedRealtime() - sessionStartElapsed
-        val projectedTotal = todayTotalAtSessionStart + elapsedInSession
+        val projectedTotal = todayTotalAtSessionStart + sessionTracker.openDurationMs()
         if (projectedTotal >= effectiveLimitMs()) {
             bumpUserOutOfReels(projectedTotal)
         }
@@ -483,7 +489,9 @@ class ReelsAccessibilityService : AccessibilityService() {
      */
     private fun bumpUserOutOfReels(watchedMs: Long) {
         hasBumpedThisSession = true
+        val platform = sessionTracker.currentPlatform ?: return
         val spec = LimitOverlaySpec.forBump(
+            shortFormLabel = platform.labelFor(Section.SHORT_VIDEO),
             watchedMs = watchedMs,
             limitMs = cachedDailyLimitMs,
             extraMs = cachedExtensionMs,
@@ -494,13 +502,13 @@ class ReelsAccessibilityService : AccessibilityService() {
         Log.d(TAG, "Daily limit exceeded mid-session — showing ${spec.variant} overlay before eject")
 
         // Commit watch time up to now so the countdown itself isn't counted as Reels time
-        pendingStopRunnable?.let { debounceHandler.removeCallbacks(it) }
-        pendingStopRunnable = null
         debounceRunnable?.let { debounceHandler.removeCallbacks(it) }
-        stopReelsTiming()
+        stopTracking()
 
+        overlayAppPackage = AppDetectors.all.firstOrNull { it.platform == platform }?.packageName
         limitOverlay.show(
             spec,
+            themeMode = cachedThemeMode,
             onLeave = { attemptEject(attempt = 1) },
             onExtend = { minutes -> grantExtension(minutes) },
         )
@@ -533,43 +541,31 @@ class ReelsAccessibilityService : AccessibilityService() {
 
         debounceHandler.postDelayed({
             val root = rootInActiveWindow
-            val stillInReels = root != null && isReelsScreen(root).first
+            val stillInReels = root != null &&
+                AppDetectors.forPackage(root.packageName)?.detectSection(root)?.isShortForm == true
             root?.recycle()
 
             if (!stillInReels) {
-                stopReelsTiming()
                 limitOverlay.dismiss()
             } else if (attempt < MAX_EJECT_ATTEMPTS) {
                 Log.w(TAG, "Eject attempt $attempt still in Reels — retrying")
                 attemptEject(attempt + 1)
             } else {
                 Log.w(TAG, "Eject failed after $MAX_EJECT_ATTEMPTS attempts, giving up for this session")
-                stopReelsTiming()
                 limitOverlay.dismiss()
             }
         }, EJECT_VERIFY_DELAY_MS)
-    }
-
-    private fun stopReelsTiming(){
-        if (!isReelsSession) return
-        isReelsSession = false
-        limitStateLoadJob?.cancel()
-        val delta = SystemClock.elapsedRealtime() - sessionStartElapsed
-        serviceScope.launch {
-            screenTimeStore.addElapsedTime(delta)
-            checkDailyLimit()
-        }
     }
 
     private suspend fun checkDailyLimit(){
         // Once a day — the overlay already covers every bump, so repeating the
         // notification (and its sound) on each Reels visit is just noise
         if (screenTimeStore.isNotifiedToday()) return
-        val totalMs = screenTimeStore.getTodayTotal()
+        val totalMs = usageRepository.shortFormTotalOn()
         val limitMs = screenTimeStore.getDailyLimit() * 60_000L
         if (totalMs >= limitMs) {
             showLimitNotification()
-            screenTimeStore.setNotifiedToday(true)
+            screenTimeStore.markNotifiedToday()
         }
     }
     private fun showLimitNotification() {

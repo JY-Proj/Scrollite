@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Dimmed while the extension options are still locked -->
-<selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:color="#4DFFFFFF" android:state_enabled="false" />
-    <item android:color="@color/limit_overlay_body" />
-</selector>

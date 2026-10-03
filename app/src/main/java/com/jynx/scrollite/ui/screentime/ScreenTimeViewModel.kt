@@ -4,7 +4,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.jynx.scrollite.data.Platform
 import com.jynx.scrollite.data.ScreenTimeStore
+import com.jynx.scrollite.data.Section
+import com.jynx.scrollite.data.UsageRepository
+import com.jynx.scrollite.data.UsageSession
 import com.jynx.scrollite.data.Strictness
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -21,9 +25,33 @@ data class ScreenTimeUiState(
     val minutesWatched: Long = 0L,
     val limitMinutes: Int = 0,
     val limitReached: Boolean = false,
-)
+    val minutesLeft: Long = 0L,
+    /** The last fifth of the limit, when a gentle heads-up is worth showing. */
+    val showHeadsUp: Boolean = false,
+) {
+    companion object {
+        fun of(totalMillis: Long, limitMinutes: Int): ScreenTimeUiState {
+            val minutesWatched = totalMillis / 60_000L
+            val limitReached = totalMillis >= limitMinutes * 60_000L
+            val minutesLeft = (limitMinutes - minutesWatched).coerceAtLeast(0L)
+            return ScreenTimeUiState(
+                minutesWatched = minutesWatched,
+                limitMinutes = limitMinutes,
+                limitReached = limitReached,
+                minutesLeft = minutesLeft,
+                showHeadsUp = !limitReached && minutesLeft * HEADS_UP_FRACTION_DENOMINATOR <= limitMinutes,
+            )
+        }
 
-class ScreenTimeViewModel(private val store: ScreenTimeStore) : ViewModel() {
+        /** Heads-up once 1/N of the limit is left. */
+        private const val HEADS_UP_FRACTION_DENOMINATOR = 5
+    }
+}
+
+class ScreenTimeViewModel(
+    private val store: ScreenTimeStore,
+    private val usage: UsageRepository,
+) : ViewModel() {
 
     val dailyLimitMinutes: StateFlow<Int> = store.dailyLimitFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
@@ -31,18 +59,15 @@ class ScreenTimeViewModel(private val store: ScreenTimeStore) : ViewModel() {
     val strictness: StateFlow<Strictness> = store.strictnessFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), Strictness.DEFAULT)
 
-    /** A looser choice that only takes effect tomorrow; null when nothing is scheduled. */
-    val pendingStrictness: StateFlow<Strictness?> = store.pendingStrictnessFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    /** Loosening changes made today; sets the tone of the next confirmation. */
+    val looseningsToday: StateFlow<Int> = store.looseningsTodayFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val extensionsUsedToday: StateFlow<Int> = store.extensionsUsedTodayFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     val uiState: StateFlow<ScreenTimeUiState> =
-        combine(store.todayTotalFlow, store.dailyLimitFlow) { totalMillis, limitMinutes ->
-            ScreenTimeUiState(
-                minutesWatched = totalMillis / 60_000L,
-                limitMinutes = limitMinutes,
-                limitReached = totalMillis >= limitMinutes * 60_000L,
-            )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ScreenTimeUiState())
+        combine(usage.observeShortFormTotalToday(), store.dailyLimitFlow, ScreenTimeUiState::of).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ScreenTimeUiState())
 
     fun setDailyLimit(minutes: Int) {
         viewModelScope.launch { store.setDailyLimit(minutes) }
@@ -53,16 +78,19 @@ class ScreenTimeViewModel(private val store: ScreenTimeStore) : ViewModel() {
     }
 
     /**
-     * TEMP: lets the UI simulate real timing writes before Person A's
-     * accessibility-service timing lands. Remove once real timing is live.
+     * Simulates Reels watch time (as a Reels session ending now) so the limit
+     * can be tested without actually watching. Only reachable from debug builds.
      */
     fun addDebugTime(millis: Long) {
-        viewModelScope.launch { store.addElapsedTime(millis) }
+        val now = System.currentTimeMillis()
+        viewModelScope.launch {
+            usage.record(UsageSession(startMs = now - millis, endMs = now, platform = Platform.INSTAGRAM, section = Section.SHORT_VIDEO))
+        }
     }
 
     companion object {
-        fun Factory(store: ScreenTimeStore) = viewModelFactory {
-            initializer { ScreenTimeViewModel(store) }
+        fun Factory(store: ScreenTimeStore, usage: UsageRepository) = viewModelFactory {
+            initializer { ScreenTimeViewModel(store, usage) }
         }
     }
 }

@@ -1,11 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Clickable so touches are consumed here instead of reaching the Reel underneath -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/limit_overlay_scrim"
+    android:background="@drawable/bg_limit_overlay_scrim"
     android:clickable="true"
     android:focusable="false">
+
+    <!-- Brand mark, so the screen reads as Scrollite rather than a system dialog -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="56dp"
+        android:gravity="center_vertical"
+        android:importantForAccessibility="noHideDescendants"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:src="@drawable/ic_scrollite_logo" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:text="@string/app_name"
+            android:textColor="@color/limit_overlay_text_primary"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 
     <!-- Main "time's up" content -->
     <LinearLayout
@@ -19,9 +45,11 @@
         android:paddingEnd="32dp">
 
         <ImageView
-            android:layout_width="56dp"
-            android:layout_height="56dp"
+            android:layout_width="@dimen/limit_overlay_icon_ring_size"
+            android:layout_height="@dimen/limit_overlay_icon_ring_size"
+            android:background="@drawable/bg_limit_icon_ring"
             android:importantForAccessibility="no"
+            android:padding="28dp"
             android:src="@drawable/ic_limit_timer" />
 
         <TextView
@@ -33,17 +61,58 @@
             android:id="@+id/limit_body"
             style="@style/LimitOverlay.Body" />
 
+        <!-- Today's usage against the limit -->
+        <LinearLayout
+            style="@style/LimitOverlay.Card"
+            android:screenReaderFocusable="true"
+            tools:targetApi="p">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    style="@style/LimitOverlay.CardLabel"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:text="@string/limit_overlay_card_label" />
+
+                <TextView
+                    android:id="@+id/limit_card_limit"
+                    style="@style/LimitOverlay.CardLabel" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/limit_card_value"
+                style="@style/LimitOverlay.CardValue" />
+
+            <ProgressBar
+                android:id="@+id/limit_card_progress"
+                style="@android:style/Widget.ProgressBar.Horizontal"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/limit_overlay_progress_height"
+                android:layout_marginTop="12dp"
+                android:importantForAccessibility="no"
+                android:progressDrawable="@drawable/limit_overlay_progress" />
+        </LinearLayout>
+
         <TextView
             android:id="@+id/limit_button"
             style="@style/LimitOverlay.Button"
             android:layout_width="match_parent"
-            android:layout_marginTop="40dp" />
+            android:layout_marginTop="32dp" />
 
         <TextView
             android:id="@+id/limit_extend_link"
             style="@style/LimitOverlay.Link"
             android:text="@string/limit_overlay_extend_link"
             android:visibility="gone" />
+
+        <TextView
+            style="@style/LimitOverlay.Tag"
+            android:drawableStart="@drawable/ic_limit_moon"
+            android:text="@string/limit_overlay_resets" />
     </LinearLayout>
 
     <!-- Extension flow: a short wait before the extra-time options unlock -->
@@ -72,8 +141,7 @@
             android:id="@+id/limit_extend_cancel"
             style="@style/LimitOverlay.Button"
             android:layout_width="match_parent"
-            android:layout_marginTop="40dp"
-            android:text="@string/limit_overlay_extend_cancel" />
+            android:layout_marginTop="40dp" />
 
         <LinearLayout
             android:layout_width="wrap_content"

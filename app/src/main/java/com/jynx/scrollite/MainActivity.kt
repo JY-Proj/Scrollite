@@ -1,19 +1,26 @@
 package com.jynx.scrollite
 
+import android.graphics.Color
 import android.os.Bundle
+import androidx.annotation.DrawableRes
+import androidx.activity.SystemBarStyle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -21,16 +28,23 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jynx.scrollite.data.AppDatabase
+import com.jynx.scrollite.data.AppearanceStore
 import com.jynx.scrollite.data.RoomReelsRepository
 import com.jynx.scrollite.data.ScreenTimeStore
-import com.jynx.scrollite.ui.reels.ReelsListScreen
+import com.jynx.scrollite.data.ThemeMode
+import com.jynx.scrollite.data.UsageRepository
+import com.jynx.scrollite.ui.dashboard.StatsScreen
+import com.jynx.scrollite.ui.dashboard.WeeklyDashboardViewModel
 import com.jynx.scrollite.ui.reels.ReelsListViewModel
-import com.jynx.scrollite.ui.screentime.ScreenTimeSummary
 import com.jynx.scrollite.ui.screentime.ScreenTimeViewModel
 import com.jynx.scrollite.ui.screentime.SettingsScreen
+import com.jynx.scrollite.ui.theme.AppearanceViewModel
 import com.jynx.scrollite.ui.theme.ScrolliteTheme
+import com.jynx.scrollite.ui.today.TodayScreen
 import android.Manifest
 import android.os.Build
 import androidx.activity.result.contract.ActivityResultContracts
@@ -51,8 +65,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            ScrolliteTheme {
-                AppRoot()
+            val appearanceViewModel: AppearanceViewModel = viewModel(
+                factory = AppearanceViewModel.Factory(AppearanceStore(applicationContext))
+            )
+            // Render nothing for the moment the stored choice takes to load, rather than flash the wrong theme
+            val themeMode = appearanceViewModel.themeMode.collectAsStateWithLifecycle().value ?: return@setContent
+            val darkTheme = themeMode.isDark(systemIsDark = isSystemInDarkTheme())
+
+            // Status and nav bar icons follow the app's theme, not just the phone's
+            LaunchedEffect(darkTheme) {
+                enableEdgeToEdge(
+                    statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { darkTheme },
+                    navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { darkTheme },
+                )
+            }
+
+            ScrolliteTheme(darkTheme = darkTheme) {
+                AppRoot(
+                    themeMode = themeMode,
+                    onThemeModeChange = appearanceViewModel::setThemeMode,
+                )
 
                 if (showAccessibilityDialog) {
                     AlertDialog(
@@ -105,9 +137,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+private enum class Tab(val label: String, @DrawableRes val icon: Int) {
+    TODAY("Today", R.drawable.ic_nav_today),
+    STATS("Stats", R.drawable.ic_nav_stats),
+    SETTINGS("Settings", R.drawable.ic_nav_settings),
+}
+
 @Composable
-private fun AppRoot(modifier: Modifier = Modifier) {
+private fun AppRoot(
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
 
     val reelsRepository = remember {
@@ -118,50 +159,52 @@ private fun AppRoot(modifier: Modifier = Modifier) {
     )
 
     val screenTimeStore = remember { ScreenTimeStore(context.applicationContext) }
+    val usageRepository = remember {
+        UsageRepository(AppDatabase.getInstance(context).usageSessionDao())
+    }
     val screenTimeViewModel: ScreenTimeViewModel = viewModel(
-        factory = ScreenTimeViewModel.Factory(screenTimeStore)
+        factory = ScreenTimeViewModel.Factory(screenTimeStore, usageRepository)
+    )
+    val weeklyDashboardViewModel: WeeklyDashboardViewModel = viewModel(
+        factory = WeeklyDashboardViewModel.Factory(usageRepository, screenTimeStore)
     )
 
-    // Lightweight two-screen toggle — avoids pulling in a navigation dependency
-    // for what is currently just main <-> settings.
-    var showSettings by rememberSaveable { mutableStateOf(false) }
+    // Three fixed tabs — a navigation dependency would add little for now
+    var tab by rememberSaveable { mutableStateOf(Tab.TODAY) }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text(if (showSettings) "Settings" else "Scrollite") },
-                navigationIcon = {
-                    if (showSettings) {
-                        TextButton(onClick = { showSettings = false }) {
-                            Text("Back")
-                        }
+        bottomBar = {
+            Column {
+                HorizontalDivider(color = ScrolliteTheme.colors.divider)
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                    Tab.entries.forEach { item ->
+                        NavigationBarItem(
+                            selected = tab == item,
+                            onClick = { tab = item },
+                            icon = { Icon(painterResource(item.icon), contentDescription = null) },
+                            label = { Text(item.label) },
+                        )
                     }
-                },
-                actions = {
-                    if (!showSettings) {
-                        TextButton(onClick = { showSettings = true }) {
-                            Text("Settings")
-                        }
-                    }
-                },
-            )
+                }
+            }
         },
     ) { innerPadding ->
-        if (showSettings) {
-            SettingsScreen(
-                viewModel = screenTimeViewModel,
-                modifier = Modifier.padding(innerPadding),
+        val contentModifier = Modifier.padding(innerPadding)
+        when (tab) {
+            Tab.TODAY -> TodayScreen(
+                screenTimeViewModel = screenTimeViewModel,
+                weeklyDashboardViewModel = weeklyDashboardViewModel,
+                reelsViewModel = reelsViewModel,
+                modifier = contentModifier,
             )
-        } else {
-            Column(modifier = Modifier.padding(innerPadding)) {
-                ScreenTimeSummary(viewModel = screenTimeViewModel)
-                HorizontalDivider()
-                ReelsListScreen(
-                    viewModel = reelsViewModel,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            Tab.STATS -> StatsScreen(viewModel = weeklyDashboardViewModel, modifier = contentModifier)
+            Tab.SETTINGS -> SettingsScreen(
+                viewModel = screenTimeViewModel,
+                themeMode = themeMode,
+                onThemeModeChange = onThemeModeChange,
+                modifier = contentModifier,
+            )
         }
     }
 }

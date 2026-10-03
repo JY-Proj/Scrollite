@@ -16,7 +16,7 @@ class LimitOverlaySpecTest {
         extensionsUsedToday: Int = 0,
         maxExtensionsPerDay: Int = 1,
         alreadyOverAtSessionStart: Boolean = false,
-    ) = LimitOverlaySpec.forBump(watchedMs, limitMs, extraMs, extensionsUsedToday, maxExtensionsPerDay, alreadyOverAtSessionStart)
+    ) = LimitOverlaySpec.forBump("Reels", watchedMs, limitMs, extraMs, extensionsUsedToday, maxExtensionsPerDay, alreadyOverAtSessionStart)
 
     @Test
     fun crossingLimitMidSession_showsFullCountdown() {
