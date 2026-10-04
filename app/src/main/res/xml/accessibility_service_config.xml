@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Event types are deliberately narrow (least privilege, and every delivered
+    event wakes the service — typing or tapping in any app would otherwise
+    reach us). ReelsAccessibilityService.onAccessibilityEvent relies on:
+      - typeWindowStateChanged:   app/screen switches (start/stop tracking, immediate)
+      - typeWindowContentChanged: screen updates (section changes, new videos)
+      - typeViewScrolled:         swiping to the next video
+    A feature that needs another type (e.g. typeViewClicked) must add it here,
+    or its events will silently never arrive.
+-->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds"
     android:canRetrieveWindowContent="true"

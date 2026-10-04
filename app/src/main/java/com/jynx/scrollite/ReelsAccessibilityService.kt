@@ -6,6 +6,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.graphics.Bitmap
 import android.os.Build
 import android.view.Display
@@ -35,7 +36,9 @@ import com.jynx.scrollite.data.UsageSession
 import com.jynx.scrollite.tracking.AppDetector
 import com.jynx.scrollite.tracking.AppDetectors
 import com.jynx.scrollite.tracking.Moment
+import com.jynx.scrollite.tracking.IdleRecheck
 import com.jynx.scrollite.tracking.SessionTracker
+import com.jynx.scrollite.tracking.Throttle
 import com.jynx.scrollite.ui.limit.LimitOverlay
 import com.jynx.scrollite.ui.limit.LimitOverlaySpec
 import kotlinx.coroutines.CoroutineScope
@@ -74,6 +77,16 @@ class ReelsAccessibilityService : AccessibilityService() {
         private const val ID_FEED_TAB = "com.instagram.android:id/feed_tab"
         private const val LAUNCH_REDIRECT_DELAY_MS = 500L // give the UI time to render before clicking
 
+        // Detection reads the tracked app's screen tree (calls into that app's process),
+        // and video playback alone fires many content-change events a second. Run it
+        // at most this often; screen switches still run immediately. See Throttle.
+        private const val DETECTION_INTERVAL_MS = 300L
+
+        // Safety re-check while a session is open but the app has gone quiet,
+        // so a stale reading (e.g. Reels caught mid-transition) can't keep
+        // counting. Caps that error at this long; see IdleRecheck.
+        private const val IDLE_RECHECK_MS = 5_000L
+
         // Section detection flickers for single frames during normal scrolling
         // (23 false readings observed within 86ms in one real session) — only treat
         // a section change as real if the new reading holds for this long.
@@ -86,6 +99,14 @@ class ReelsAccessibilityService : AccessibilityService() {
 
     // Debounce
     private val debounceHandler = Handler(Looper.getMainLooper())
+    private val detectionThrottle = Throttle(DETECTION_INTERVAL_MS)
+    private val trailingDetection = Runnable { detectNow() }
+    private val idleRecheck = IdleRecheck(
+        intervalMs = IDLE_RECHECK_MS,
+        postDelayed = { runnable, delayMs -> debounceHandler.postDelayed(runnable, delayMs) },
+        removeCallbacks = { runnable -> debounceHandler.removeCallbacks(runnable) },
+        onRecheck = { detectNow() },
+    )
     private var debounceRunnable: Runnable? = null
     private var pendingSwitchRunnable: Runnable? = null
     private var pendingSwitchTarget: Pair<Platform, Section>? = null
@@ -128,6 +149,11 @@ class ReelsAccessibilityService : AccessibilityService() {
     private var overlayAppPackage: String? = null
 
 
+    /**
+     * Only the event types listed in res/xml/accessibility_service_config.xml
+     * arrive here (window state, window content, view scrolled). Add a type
+     * there before relying on it in this handler.
+     */
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         Log.d(TAG, "eventType=${AccessibilityEvent.eventTypeToString(event.eventType)} pkg=${event.packageName}")
 
@@ -165,9 +191,33 @@ class ReelsAccessibilityService : AccessibilityService() {
             }
             return
         }
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            detectNow()
+            return
+        }
+        // A skipped event becomes one run at the end of the window, so the latest
+        // screen is always read — even when it was the last event of a burst
+        when (val decision = detectionThrottle.request(SystemClock.uptimeMillis())) {
+            Throttle.Decision.RunNow -> detectNow()
+            is Throttle.Decision.RunLater -> debounceHandler.postDelayed(trailingDetection, decision.delayMs)
+            Throttle.Decision.AlreadyScheduled -> Unit
+        }
+    }
+
+    /**
+     * Reads the front window and updates section timing, the limit check and
+     * new-video extraction. Called straight from events or as the throttle's
+     * trailing run, so it re-checks everything instead of trusting the event.
+     */
+    private fun detectNow() {
+        cancelTrailingDetection()
+        detectionThrottle.onRan(SystemClock.uptimeMillis())
+        if (limitOverlay.isShowing) return
+
         val root = rootInActiveWindow ?: return
         // Apps keep sending events behind e.g. the notification shade — don't time those
-        if (root.packageName != detector.packageName) {
+        val detector = AppDetectors.forPackage(root.packageName)
+        if (detector == null) {
             root.recycle()
             return
         }
@@ -175,6 +225,7 @@ class ReelsAccessibilityService : AccessibilityService() {
         val section = detector.detectSection(root)
         Log.d(TAG, "${detector.platform} section=$section")
         onSectionDetected(detector.platform, section)
+        idleRecheck.afterDetection(sessionOpen = sessionTracker.currentPlatform != null)
 
         if (section.isShortForm) {
             val author = detector.extractShortVideo(root)?.author
@@ -426,9 +477,17 @@ class ReelsAccessibilityService : AccessibilityService() {
 
     /** Ends the open session (left Instagram, screen off, bumped, service stopping). */
     private fun stopTracking() {
+        // A pending trailing detection or re-check would otherwise restart timing after e.g. screen off
+        cancelTrailingDetection()
+        idleRecheck.stop()
         cancelPendingSwitch()
         limitStateLoadJob?.cancel()
         sessionTracker.stop()?.let { persist(it) }
+    }
+
+    private fun cancelTrailingDetection() {
+        debounceHandler.removeCallbacks(trailingDetection)
+        detectionThrottle.cancelTrailing()
     }
 
     private fun persist(session: UsageSession) {
