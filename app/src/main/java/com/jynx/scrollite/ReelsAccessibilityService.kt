@@ -37,6 +37,7 @@ import com.jynx.scrollite.tracking.AppDetector
 import com.jynx.scrollite.tracking.AppDetectors
 import com.jynx.scrollite.tracking.Moment
 import com.jynx.scrollite.tracking.IdleRecheck
+import com.jynx.scrollite.tracking.LimitTimer
 import com.jynx.scrollite.tracking.SessionTracker
 import com.jynx.scrollite.tracking.Throttle
 import com.jynx.scrollite.ui.limit.LimitOverlay
@@ -107,6 +108,11 @@ class ReelsAccessibilityService : AccessibilityService() {
         removeCallbacks = { runnable -> debounceHandler.removeCallbacks(runnable) },
         onRecheck = { detectNow() },
     )
+    // Fires when the open short-form session reaches the limit; see scheduleLimitCheck()
+    private val limitCheck = Runnable {
+        checkLimitDuringSession()
+        if (!hasBumpedThisSession) scheduleLimitCheck() // fired a little early; aim again
+    }
     private var debounceRunnable: Runnable? = null
     private var pendingSwitchRunnable: Runnable? = null
     private var pendingSwitchTarget: Pair<Platform, Section>? = null
@@ -142,6 +148,12 @@ class ReelsAccessibilityService : AccessibilityService() {
     private var cachedThemeMode = ThemeMode.DEFAULT
     private var hasBumpedThisSession = false
     private var limitStateLoadJob: Job? = null
+
+    // Which load the cached limit values belong to; main thread only. Checks
+    // wait for the current one — the previous session's values may be from
+    // yesterday and would bump a user who's under today's limit.
+    private var limitStateGeneration = 0
+    private var loadedLimitStateGeneration = -1
 
     private val limitOverlay by lazy { LimitOverlay(this) }
 
@@ -481,6 +493,7 @@ class ReelsAccessibilityService : AccessibilityService() {
         cancelTrailingDetection()
         idleRecheck.stop()
         cancelPendingSwitch()
+        debounceHandler.removeCallbacks(limitCheck)
         limitStateLoadJob?.cancel()
         sessionTracker.stop()?.let { persist(it) }
     }
@@ -514,6 +527,7 @@ class ReelsAccessibilityService : AccessibilityService() {
      */
     private fun loadSessionLimitState() {
         limitStateLoadJob?.cancel()
+        val generation = ++limitStateGeneration
         limitStateLoadJob = launchInOrder {
             val total = usageRepository.shortFormTotalOn()
             val limit = screenTimeStore.getDailyLimit() * 60_000L
@@ -526,7 +540,29 @@ class ReelsAccessibilityService : AccessibilityService() {
             cachedExtensionMs = extension
             cachedExtensionsUsed = extensionsUsed
             cachedDailyLimitMs = limit // written last — it's what arms checkLimitDuringSession()
+            debounceHandler.post {
+                // A load cancelled after its writes still posts this; only the current one arms checks
+                if (generation == limitStateGeneration) {
+                    loadedLimitStateGeneration = generation
+                    scheduleLimitCheck()
+                }
+            }
         }
+    }
+
+    /**
+     * Checks the limit at the moment the open session will cross it, instead
+     * of waiting for the tracked app's next event — a playing video can go
+     * seconds without one, so an event-only check showed the overlay late or,
+     * if the user left first, not at all.
+     */
+    private fun scheduleLimitCheck() {
+        debounceHandler.removeCallbacks(limitCheck)
+        if (sessionTracker.currentSection?.isShortForm != true || hasBumpedThisSession) return
+        val delayMs = LimitTimer.msUntilLimit(
+            todayTotalAtSessionStart, sessionTracker.openDurationMs(), effectiveLimitMs()
+        ) ?: return
+        debounceHandler.postDelayed(limitCheck, delayMs)
     }
 
     /** The daily limit plus any extra time granted today. */
@@ -535,6 +571,9 @@ class ReelsAccessibilityService : AccessibilityService() {
 
     private fun checkLimitDuringSession() {
         if (hasBumpedThisSession) return // don't spam performGlobalAction every event
+        // The timed check can land after the session ended or moved off short-form
+        if (sessionTracker.currentSection?.isShortForm != true) return
+        if (loadedLimitStateGeneration != limitStateGeneration) return // still loading; the load schedules a check
         val projectedTotal = todayTotalAtSessionStart + sessionTracker.openDurationMs()
         if (projectedTotal >= effectiveLimitMs()) {
             bumpUserOutOfReels(projectedTotal)
