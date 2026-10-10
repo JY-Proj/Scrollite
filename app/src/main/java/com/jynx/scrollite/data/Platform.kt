@@ -27,6 +27,14 @@ enum class Platform(
         sectionLabels = mapOf(
             Section.SHORT_VIDEO to "Shorts",
         ),
+    ),
+    REDNOTE(
+        displayName = "RedNote",
+        sectionLabels = mapOf(
+            Section.SHORT_VIDEO to "Videos",
+            Section.EXPLORE to "Explore",
+            Section.MESSAGES to "Messages",
+        ),
     );
 
     /** This app's own name for [section], e.g. Reels for Instagram's short videos. */
